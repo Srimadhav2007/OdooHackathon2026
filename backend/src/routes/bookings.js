@@ -124,8 +124,8 @@ router.put('/:id/reschedule', authenticate, async (req, res, next) => {
       
       if (!booking) throw Object.assign(new Error('Booking not found'), { status: 404 });
 
-      const isOwner = booking.userId.toString() === actor.id.toString();
-      const isManager = actor.role === 'ADMIN' || actor.role === 'ASSET_MANAGER';
+      const isOwner = booking.userId.toString() === req.user.id.toString();
+      const isManager = req.user.role === 'ADMIN' || req.user.role === 'ASSET_MANAGER';
       
       if (!isOwner && !isManager) {
         throw Object.assign(new Error('Access denied. You are not authorized to reschedule this booking.'), { status: 403 });
@@ -164,7 +164,7 @@ router.put('/:id/reschedule', authenticate, async (req, res, next) => {
 
       await tx.activityLog.create({
         data: {
-          actorId: BigInt(actor.id),
+          actorId: bActorId,
           action: 'RESCHEDULED_BOOKING',
           entity: 'BOOKING',
           entityId: id,

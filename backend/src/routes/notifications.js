@@ -13,11 +13,13 @@ const prisma = new PrismaClient();
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const bActorId = BigInt(req.user.id);
-    const { unreadOnly } = req.query;
+    const { unreadOnly, isRead, type } = req.query;
 
-    const where = { recipientId: BigInt(actor.id) };
+    const where = { recipientId: bActorId };
 
-    if (isRead !== undefined) {
+    if (unreadOnly === 'true') {
+      where.isRead = false;
+    } else if (isRead !== undefined) {
       where.isRead = isRead === 'true' || isRead === '1';
     }
 
@@ -31,7 +33,7 @@ router.get('/', authenticate, async (req, res, next) => {
     });
 
     const unreadCount = await prisma.notification.count({
-      where: { recipientId: BigInt(actor.id), isRead: false }
+      where: { recipientId: bActorId, isRead: false }
     });
 
     res.json({
@@ -58,7 +60,7 @@ router.put('/read-all', authenticate, async (req, res, next) => {
     const bActorId = BigInt(req.user.id);
 
     await prisma.notification.updateMany({
-      where: { recipientId: BigInt(actor.id), isRead: false },
+      where: { recipientId: bActorId, isRead: false },
       data: { isRead: true }
     });
 

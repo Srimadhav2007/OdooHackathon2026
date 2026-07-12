@@ -50,26 +50,26 @@ router.get('/', authenticate, async (req, res, next) => {
 
     const where = {};
 
-    if (actor.role === 'EMPLOYEE') {
+    if (req.user.role === 'EMPLOYEE') {
       where.OR = [
-        { raisedById: BigInt(actor.id) },
-        { technicianId: BigInt(actor.id) }
+        { raisedById: bActorId },
+        { technicianId: bActorId }
       ];
-    } else if (actor.role === 'DEPT_HEAD') {
+    } else if (req.user.role === 'DEPT_HEAD') {
       const depts = await prisma.department.findMany({
-        where: { headId: BigInt(actor.id) },
+        where: { headId: bActorId },
         select: { id: true }
       });
       if (depts.length > 0) {
         where.OR = [
           { raisedBy: { departmentId: { in: depts.map(d => d.id) } } },
-          { raisedById: BigInt(actor.id) },
-          { technicianId: BigInt(actor.id) }
+          { raisedById: bActorId },
+          { technicianId: bActorId }
         ];
       } else {
         where.OR = [
-          { raisedById: BigInt(actor.id) },
-          { technicianId: BigInt(actor.id) }
+          { raisedById: bActorId },
+          { technicianId: bActorId }
         ];
       }
     }
