@@ -6,11 +6,13 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const pool = require('../config/db');
+const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const { requireAssetManager } = require('../middleware/roleGuard');
 const maintenanceService = require('../services/maintenanceService');
 const notificationService = require('../services/notificationService');
+
+const prisma = new PrismaClient();
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -20,33 +22,23 @@ const upload = multer({
 });
 
 // Helper to map DB row
-function mapMaintenanceRow(row) {
+function mapMaintenanceRow(m) {
   return {
-    id: row.id,
-    assetId: row.assetId,
-    raisedById: row.raisedById,
-    priority: row.priority,
-    status: row.status,
-    description: row.description,
-    photoUrl: row.photoUrl,
-    approvedById: row.approvedById,
-    technicianId: row.technicianId,
-    resolvedAt: row.resolvedAt,
-    resolution: row.resolution,
-    createdAt: row.createdAt,
-    asset: {
-      id: row.assetId,
-      name: row.asset_name,
-      tag: row.asset_tag
-    },
-    raisedBy: {
-      id: row.raisedById,
-      name: row.requester_name
-    },
-    technician: row.technicianId ? {
-      id: row.technicianId,
-      name: row.technician_name
-    } : null
+    id: m.id,
+    assetId: m.assetId,
+    raisedById: m.raisedById,
+    priority: m.priority,
+    status: m.status,
+    description: m.description,
+    photoUrl: m.photoUrl,
+    approvedById: m.approvedById,
+    technicianId: m.technicianId,
+    resolvedAt: m.resolvedAt,
+    resolution: m.resolution,
+    createdAt: m.createdAt,
+    asset: m.asset ? { id: m.asset.id, name: m.asset.name, tag: m.asset.tag } : null,
+    raisedBy: m.raisedBy ? { id: m.raisedBy.id, name: m.raisedBy.name } : null,
+    technician: m.technician ? { id: m.technician.id, name: m.technician.name } : null
   };
 }
 
@@ -56,71 +48,47 @@ router.get('/', authenticate, async (req, res, next) => {
     const { status, priority, assetId } = req.query;
     const actor = req.user;
 
-    let query = `
-      SELECT 
-        m.id, 
-        m.asset_id AS "assetId", 
-        m.raised_by_id AS "raisedById", 
-        m.priority, 
-        m.status, 
-        m.description, 
-        m.photo_url AS "photoUrl", 
-        m.approved_by_id AS "approvedById", 
-        m.technician_id AS "technicianId", 
-        m.resolved_at AS "resolvedAt", 
-        m.resolution, 
-        m.created_at AS "createdAt",
-        ast.name AS asset_name,
-        ast.tag AS asset_tag,
-        req.name AS requester_name,
-        tech.name AS technician_name
-      FROM maintenance_request m
-      JOIN asset ast ON m.asset_id = ast.id
-      JOIN employee req ON m.raised_by_id = req.id
-      LEFT JOIN employee tech ON m.technician_id = tech.id
-      WHERE 1=1
-    `;
-    const params = [];
+    const where = {};
 
-    // Role filtering
     if (actor.role === 'EMPLOYEE') {
-      // Employees only see their own requests (or assigned requests as technician)
-      query += ` AND (m.raised_by_id = $${params.length + 1} OR m.technician_id = $${params.length + 1})`;
-      params.push(actor.id);
+      where.OR = [
+        { raisedById: BigInt(actor.id) },
+        { technicianId: BigInt(actor.id) }
+      ];
     } else if (actor.role === 'DEPT_HEAD') {
-      // DeptHead sees own department's requests
-      const deptsRes = await pool.query('SELECT id FROM department WHERE head_employee_id = $1', [actor.id]);
-      if (deptsRes.rows.length > 0) {
-        const deptIds = deptsRes.rows.map(r => r.id);
-        query += ` AND (req.department_id = ANY($${params.length + 1}) OR m.raised_by_id = $${params.length + 2} OR m.technician_id = $${params.length + 2})`;
-        params.push(deptIds, actor.id);
+      const depts = await prisma.department.findMany({
+        where: { headId: BigInt(actor.id) },
+        select: { id: true }
+      });
+      if (depts.length > 0) {
+        where.OR = [
+          { raisedBy: { departmentId: { in: depts.map(d => d.id) } } },
+          { raisedById: BigInt(actor.id) },
+          { technicianId: BigInt(actor.id) }
+        ];
       } else {
-        query += ` AND (m.raised_by_id = $${params.length + 1} OR m.technician_id = $${params.length + 1})`;
-        params.push(actor.id);
+        where.OR = [
+          { raisedById: BigInt(actor.id) },
+          { technicianId: BigInt(actor.id) }
+        ];
       }
     }
 
-    // Apply URL parameters filters
-    if (status) {
-      query += ` AND m.status = $${params.length + 1}`;
-      params.push(status);
-    }
+    if (status) where.status = status;
+    if (priority) where.priority = priority;
+    if (assetId) where.assetId = BigInt(assetId);
 
-    if (priority) {
-      query += ` AND m.priority = $${params.length + 1}`;
-      params.push(priority);
-    }
+    const requests = await prisma.maintenanceRequest.findMany({
+      where,
+      include: {
+        asset: { select: { id: true, name: true, tag: true } },
+        raisedBy: { select: { id: true, name: true } },
+        technician: { select: { id: true, name: true } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
 
-    if (assetId) {
-      query += ` AND m.asset_id = $${params.length + 1}`;
-      params.push(assetId);
-    }
-
-    query += ` ORDER BY m.created_at DESC`;
-
-    const result = await pool.query(query, params);
-    res.json(result.rows.map(mapMaintenanceRow));
-
+    res.json(requests.map(mapMaintenanceRow));
   } catch (err) {
     next(err);
   }
@@ -136,13 +104,13 @@ router.post('/', authenticate, upload.single('photo'), async (req, res, next) =>
       return res.status(400).json({ error: 'Asset ID and Description are required' });
     }
 
-    // 1. Validate: assetId (must exist + be ALLOCATED/AVAILABLE)
-    const assetCheck = await pool.query('SELECT id, status FROM asset WHERE id = $1', [assetId]);
-    if (assetCheck.rows.length === 0) {
-      return res.status(400).json({ error: 'Asset not found' });
-    }
+    const asset = await prisma.asset.findUnique({
+      where: { id: BigInt(assetId) },
+      select: { id: true, status: true }
+    });
 
-    const asset = assetCheck.rows[0];
+    if (!asset) return res.status(400).json({ error: 'Asset not found' });
+
     const allowedStatuses = ['ALLOCATED', 'AVAILABLE'];
     if (!allowedStatuses.includes(asset.status)) {
       return res.status(400).json({ error: `Asset is currently in status: ${asset.status}. Must be AVAILABLE or ALLOCATED.` });
@@ -151,34 +119,41 @@ router.post('/', authenticate, upload.single('photo'), async (req, res, next) =>
     const photoPath = req.file ? `/uploads/${req.file.filename}` : null;
     const prio = priority || 'MEDIUM';
 
-    // 2. Create request with status = PENDING
-    const result = await pool.query(
-      `
-      INSERT INTO maintenance_request (asset_id, raised_by_id, priority, status, description, photo_url)
-      VALUES ($1, $2, $3, 'PENDING', $4, $5)
-      RETURNING *
-      `,
-      [assetId, actor.id, prio, description.trim(), photoPath]
-    );
-    const request = result.rows[0];
+    const request = await prisma.$transaction(async (tx) => {
+      const reqCreated = await tx.maintenanceRequest.create({
+        data: {
+          assetId: BigInt(assetId),
+          raisedById: BigInt(actor.id),
+          priority: prio,
+          status: 'PENDING',
+          description: description.trim(),
+          photoUrl: photoPath
+        }
+      });
 
-    // 3. Notify Asset Managers
-    const managersRes = await pool.query("SELECT id FROM employee WHERE role IN ('ASSET_MANAGER', 'ADMIN') AND status = true");
-    const managerIds = managersRes.rows.map(r => r.id);
+      await tx.activityLog.create({
+        data: {
+          actorId: BigInt(actor.id),
+          action: 'RAISED_MAINTENANCE',
+          entity: 'MAINTENANCE_REQUEST',
+          entityId: reqCreated.id,
+          metadata: { assetId, priority: prio }
+        }
+      });
+
+      return reqCreated;
+    });
+
+    const managers = await prisma.employee.findMany({
+      where: { role: { in: ['ASSET_MANAGER', 'ADMIN'] }, status: true },
+      select: { id: true }
+    });
+
+    const managerIds = managers.map(m => m.id);
     const msg = `New maintenance request raised for asset ID ${assetId} (Priority: ${prio}).`;
     await notificationService.sendToMany(managerIds, 'MAINTENANCE_RAISED', msg, request.id, 'MAINTENANCE');
 
-    // 4. Log ActivityLog
-    await pool.query(
-      `
-      INSERT INTO activity_log (actor_id, action, entity, entity_id, metadata)
-      VALUES ($1, 'RAISED_MAINTENANCE', 'MAINTENANCE_REQUEST', $2, $3)
-      `,
-      [actor.id, request.id, JSON.stringify({ assetId, priority: prio })]
-    );
-
     res.status(201).json(request);
-
   } catch (err) {
     next(err);
   }
@@ -187,39 +162,22 @@ router.post('/', authenticate, upload.single('photo'), async (req, res, next) =>
 // GET /api/maintenance/:id
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = BigInt(req.params.id);
 
-    const query = `
-      SELECT 
-        m.id, 
-        m.asset_id AS "assetId", 
-        m.raised_by_id AS "raisedById", 
-        m.priority, 
-        m.status, 
-        m.description, 
-        m.photo_url AS "photoUrl", 
-        m.approved_by_id AS "approvedById", 
-        m.technician_id AS "technicianId", 
-        m.resolved_at AS "resolvedAt", 
-        m.resolution, 
-        m.created_at AS "createdAt",
-        ast.name AS asset_name,
-        ast.tag AS asset_tag,
-        req.name AS requester_name,
-        tech.name AS technician_name
-      FROM maintenance_request m
-      JOIN asset ast ON m.asset_id = ast.id
-      JOIN employee req ON m.raised_by_id = req.id
-      LEFT JOIN employee tech ON m.technician_id = tech.id
-      WHERE m.id = $1
-    `;
-    const result = await pool.query(query, [id]);
-    if (result.rows.length === 0) {
+    const request = await prisma.maintenanceRequest.findUnique({
+      where: { id },
+      include: {
+        asset: { select: { id: true, name: true, tag: true } },
+        raisedBy: { select: { id: true, name: true } },
+        technician: { select: { id: true, name: true } }
+      }
+    });
+
+    if (!request) {
       return res.status(404).json({ error: 'Maintenance request not found' });
     }
 
-    res.json(mapMaintenanceRow(result.rows[0]));
-
+    res.json(mapMaintenanceRow(request));
   } catch (err) {
     next(err);
   }
@@ -239,51 +197,26 @@ router.put('/:id/approve', authenticate, requireAssetManager, async (req, res, n
 // PUT /api/maintenance/:id/reject
 router.put('/:id/reject', authenticate, requireAssetManager, async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = BigInt(req.params.id);
     const { reason } = req.body;
 
-    const client = await pool.connect();
+    const request = await prisma.$transaction(async (tx) => {
+      const reqCheck = await tx.maintenanceRequest.findUnique({ where: { id } });
+      if (!reqCheck) throw Object.assign(new Error('Maintenance request not found'), { status: 404 });
+      if (reqCheck.status !== 'PENDING') throw Object.assign(new Error(`Request cannot be rejected from status: ${reqCheck.status}`), { status: 400 });
 
-    try {
-      await client.query('BEGIN');
+      const updated = await tx.maintenanceRequest.update({
+        where: { id },
+        data: { status: 'REJECTED' }
+      });
 
-      // Fetch request
-      const reqRes = await client.query('SELECT * FROM maintenance_request WHERE id = $1', [id]);
-      if (reqRes.rows.length === 0) {
-        throw Object.assign(new Error('Maintenance request not found'), { status: 404 });
-      }
-      const request = reqRes.rows[0];
+      return updated;
+    });
 
-      if (request.status !== 'PENDING') {
-        throw Object.assign(new Error(`Request cannot be rejected from status: ${request.status}`), { status: 400 });
-      }
+    const msg = `Your maintenance request for asset ID ${request.assetId} has been rejected. Reason: ${reason || 'None'}`;
+    await notificationService.send(request.raisedById, 'MAINTENANCE_REJECTED', msg, id, 'MAINTENANCE');
 
-      // Update status = REJECTED
-      const updateRes = await client.query(
-        `
-        UPDATE maintenance_request
-        SET status = 'REJECTED'
-        WHERE id = $1
-        RETURNING *
-        `,
-        [id]
-      );
-      const updatedRequest = updateRes.rows[0];
-
-      // Notify requester
-      const msg = `Your maintenance request for asset ID ${request.asset_id} has been rejected. Reason: ${reason || 'None'}`;
-      await notificationService.send(request.raised_by_id, 'MAINTENANCE_REJECTED', msg, id, 'MAINTENANCE');
-
-      await client.query('COMMIT');
-      res.json(updatedRequest);
-
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-
+    res.json(request);
   } catch (err) {
     next(err);
   }
@@ -292,54 +225,33 @@ router.put('/:id/reject', authenticate, requireAssetManager, async (req, res, ne
 // PUT /api/maintenance/:id/start
 router.put('/:id/start', authenticate, async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = BigInt(req.params.id);
     const actor = req.user;
 
-    const client = await pool.connect();
+    const request = await prisma.$transaction(async (tx) => {
+      const reqCheck = await tx.maintenanceRequest.findUnique({ where: { id } });
+      if (!reqCheck) throw Object.assign(new Error('Maintenance request not found'), { status: 404 });
 
-    try {
-      await client.query('BEGIN');
-
-      // Fetch request
-      const reqRes = await client.query('SELECT * FROM maintenance_request WHERE id = $1', [id]);
-      if (reqRes.rows.length === 0) {
-        throw Object.assign(new Error('Maintenance request not found'), { status: 404 });
-      }
-      const request = reqRes.rows[0];
-
-      // Verify req.user is assigned tech or manager/admin
-      const isTech = request.technician_id && request.technician_id.toString() === actor.id.toString();
+      const isTech = reqCheck.technicianId && reqCheck.technicianId.toString() === actor.id.toString();
       const isManager = actor.role === 'ADMIN' || actor.role === 'ASSET_MANAGER';
       if (!isTech && !isManager) {
         throw Object.assign(new Error('Access denied. You are not the assigned technician.'), { status: 403 });
       }
 
       const validStates = ['TECHNICIAN_ASSIGNED', 'APPROVED'];
-      if (!validStates.includes(request.status)) {
-        throw Object.assign(new Error(`Cannot start request in status: ${request.status}`), { status: 400 });
+      if (!validStates.includes(reqCheck.status)) {
+        throw Object.assign(new Error(`Cannot start request in status: ${reqCheck.status}`), { status: 400 });
       }
 
-      // Set status = IN_PROGRESS
-      const updateRes = await client.query(
-        `
-        UPDATE maintenance_request
-        SET status = 'IN_PROGRESS'
-        WHERE id = $1
-        RETURNING *
-        `,
-        [id]
-      );
+      const updated = await tx.maintenanceRequest.update({
+        where: { id },
+        data: { status: 'IN_PROGRESS' }
+      });
 
-      await client.query('COMMIT');
-      res.json(updateRes.rows[0]);
+      return updated;
+    });
 
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-
+    res.json(request);
   } catch (err) {
     next(err);
   }
