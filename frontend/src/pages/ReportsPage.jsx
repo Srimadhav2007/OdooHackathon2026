@@ -83,7 +83,7 @@ export default function ReportsPage() {
             <select value={timeRange} onChange={(e) => setTimeRange(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
               <option>This Week</option><option>This Month</option><option>This Quarter</option>
             </select>
-            <Button variant="primary" onClick={() => triggerToast('Generating PDF Report... Download starting.')}>
+            <Button variant="primary" onClick={() => window.print()}>
               <Download size={18} className="mr-2" /> Export PDF
             </Button>
           </div>

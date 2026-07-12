@@ -36,6 +36,7 @@ const Modal = ({ isOpen, onClose, title, children }) => {
 
 export default function AssetDirectoryPage() {
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
   // Search & Filter State
@@ -94,6 +95,8 @@ export default function AssetDirectoryPage() {
 
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
       await api.post('/assets', {
         name: e.target.assetName.value,
@@ -107,6 +110,8 @@ export default function AssetDirectoryPage() {
     } catch (err) {
       console.error(err);
       triggerToast('Failed to register asset');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -244,8 +249,8 @@ export default function AssetDirectoryPage() {
             <input name="location" type="text" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600" placeholder="e.g. Storage Room A" />
           </div>
           <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4">
-            <Button type="button" variant="ghost" onClick={() => setIsRegisterModalOpen(false)}>Cancel</Button>
-            <Button type="submit" variant="primary">Register Asset</Button>
+            <Button type="button" variant="ghost" onClick={() => setIsRegisterModalOpen(false)} disabled={submitting}>Cancel</Button>
+            <Button type="submit" variant="primary" loading={submitting} disabled={submitting}>Register Asset</Button>
           </div>
         </form>
       </Modal>
