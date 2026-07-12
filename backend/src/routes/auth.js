@@ -1,63 +1,174 @@
-/**
- * routes/auth.js — Authentication routes
- *
- * POST /api/auth/signup   — Create Employee account (no role selection)
- * POST /api/auth/login    — Return JWT access + refresh tokens
- * POST /api/auth/refresh  — Exchange refresh token for new access token
- * POST /api/auth/logout   — Invalidate session (client-side clear)
- * GET  /api/auth/me       — Return current user profile
- */
-
 const express = require('express');
-const router = express.Router();
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
 const { authenticate } = require('../middleware/auth');
+
+const router = express.Router();
 
 // POST /api/auth/signup
 router.post('/signup', async (req, res, next) => {
   try {
-    // TODO (Member A):
-    //  1. Validate: name, email (format + uniqueness), password (min 8 chars)
-    //  2. Hash password with bcrypt (saltRounds = 10)
-    //  3. Create Employee with role = EMPLOYEE (never from req.body)
-    //  4. Return sanitized user (no passwordHash)
-    res.status(201).json({ message: 'TODO: signup' });
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'Name, email and password are required' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existingEmployee = await prisma.employee.findUnique({
+      where: { email: normalizedEmail }
+    });
+
+    if (existingEmployee) {
+      return res.status(409).json({ message: 'Email already registered' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await prisma.employee.create({
+      data: {
+        name: name.trim(),
+        email: normalizedEmail,
+        passwordHash: hashedPassword,
+        role: 'EMPLOYEE',
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        departmentId: true,
+        createdAt: true,
+      }
+    });
+
+    res.status(201).json({ message: 'Employee created successfully', user });
+
   } catch (err) {
     next(err);
   }
 });
+
 
 // POST /api/auth/login
 router.post('/login', async (req, res, next) => {
   try {
-    // TODO (Member A):
-    //  1. Find employee by email
-    //  2. Compare password with bcrypt
-    //  3. Sign JWT access token (15m) + refresh token (7d)
-    //  4. Return { accessToken, refreshToken, user }
-    res.json({ message: 'TODO: login' });
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const employee = await prisma.employee.findUnique({
+      where: { email: normalizedEmail }
+    });
+
+    if (!employee) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    if (!employee.status) {
+      return res.status(403).json({ message: 'Employee account is disabled' });
+    }
+
+    const passwordMatches = await bcrypt.compare(password, employee.passwordHash);
+
+    if (!passwordMatches) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    const tokenPayload = {
+      id: employee.id.toString(), // Convert BigInt to string for JWT
+      role: employee.role
+    };
+
+    const accessToken = jwt.sign(tokenPayload, process.env.JWT_ACCESS_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign(tokenPayload, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+    const { passwordHash, ...user } = employee;
+
+    res.json({ accessToken, refreshToken, user });
+
   } catch (err) {
     next(err);
   }
 });
+
 
 // POST /api/auth/refresh
 router.post('/refresh', async (req, res, next) => {
   try {
-    // TODO (Member A):
-    //  1. Verify refresh token with JWT_REFRESH_SECRET
-    //  2. Sign new access token
-    //  3. Return { accessToken }
-    res.json({ message: 'TODO: refresh' });
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return res.status(400).json({ message: 'Refresh token is required' });
+    }
+
+    const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+
+    const employee = await prisma.employee.findUnique({
+      where: { id: BigInt(payload.id) }
+    });
+
+    if (!employee || !employee.status) {
+      return res.status(401).json({ message: 'Invalid refresh token' });
+    }
+
+    const accessToken = jwt.sign(
+      { id: employee.id.toString(), role: employee.role },
+      process.env.JWT_ACCESS_SECRET,
+      { expiresIn: '15m' }
+    );
+
+    res.json({ accessToken });
+
   } catch (err) {
+    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      return res.status(401).json({ message: 'Invalid or expired refresh token' });
+    }
     next(err);
   }
 });
 
+
 // GET /api/auth/me
 router.get('/me', authenticate, async (req, res, next) => {
   try {
-    // TODO (Member A): Return full employee record for req.user.id
-    res.json({ message: 'TODO: me', userId: req.user.id });
+    const employee = await prisma.employee.findUnique({
+      where: { id: BigInt(req.user.id) },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        departmentId: true,
+        createdAt: true,
+      }
+    });
+
+    if (!employee) {
+      return res.status(404).json({ message: 'Employee not found' });
+    }
+
+    res.json({ user: employee });
+
   } catch (err) {
     next(err);
   }
