@@ -1,19 +1,12 @@
-import { motion } from 'framer-motion';
-import {
-  AlertTriangle,
-  ArrowRight,
-  Boxes,
-  CalendarClock,
-  ClipboardList,
-  PackageCheck,
-  Sparkles,
-  Users,
-} from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { AlertTriangle, ArrowRight, Boxes, CalendarClock, PackageCheck, Sparkles, Users, CheckCircle } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import StatCard from '../components/ui/StatCard';
+import { useNavigate } from 'react-router-dom';
 
 const kpis = [
   { title: 'Assets', value: '284', change: '+12 this month', icon: Boxes, tone: 'violet' },
@@ -33,33 +26,45 @@ const maintenance = [
   { title: 'Warehouse scanner', owner: 'Logistics', due: 'Tomorrow' },
 ];
 
-const returns = [
-  { title: 'Dell Latitude 5410', employee: 'Mina Shah', date: 'Jul 15' },
-  { title: 'Projector MX100', employee: 'Daniel Kim', date: 'Jul 16' },
-];
-
-const notifications = [
-  { title: 'New booking request', detail: 'Marketing requested 6 devices', tone: 'info' },
-  { title: 'Asset transfer pending', detail: 'HR transfer needs approval', tone: 'warning' },
-];
-
 export default function DashboardPage() {
+  const navigate = useNavigate();
+  const [toastMessage, setToastMessage] = useState('');
+
+  const triggerToast = (message) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(''), 3000); // Auto-hide after 3 seconds
+  };
+
   return (
-    <div className="mx-auto max-w-7xl">
+    <div className="mx-auto max-w-7xl relative pb-12">
+      
+      {/* Dynamic Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 50, x: '-50%' }}
+            className="fixed bottom-8 left-1/2 z-50 flex items-center gap-3 rounded-full bg-slate-900 px-6 py-3 text-sm font-medium text-white shadow-2xl"
+          >
+            <CheckCircle size={18} className="text-emerald-400" />
+            {toastMessage}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <PageHeader
         eyebrow="Overview"
         title="Welcome back, Admin"
         description="A calm view of your asset operations across departments."
         actions={[
-          <Button key="1" variant="primary">+ New booking</Button>,
-          <Button key="2" variant="secondary">Export report</Button>,
+          <Button key="1" variant="primary" onClick={() => navigate('/bookings')}>+ New booking</Button>,
+          <Button key="2" variant="secondary" onClick={() => triggerToast('Generating PDF Report... Download will begin shortly.')}>Export report</Button>,
         ]}
       />
 
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {kpis.map((item) => (
-          <StatCard key={item.title} {...item} />
-        ))}
+        {kpis.map((item) => <StatCard key={item.title} {...item} />)}
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_0.8fr]">
@@ -76,9 +81,7 @@ export default function DashboardPage() {
               {activities.map((item) => (
                 <div key={item.title} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
                   <div className="flex items-center gap-3">
-                    <div className="rounded-full bg-white p-2 text-slate-600 shadow-sm">
-                      <Sparkles size={16} />
-                    </div>
+                    <div className="rounded-full bg-white p-2 text-slate-600 shadow-sm"><Sparkles size={16} /></div>
                     <div>
                       <p className="text-sm font-medium text-slate-800">{item.title}</p>
                       <p className="text-xs text-slate-500">{item.time}</p>
@@ -94,7 +97,7 @@ export default function DashboardPage() {
             <Card className="p-5">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-semibold text-slate-900">Pending maintenance</h3>
-                <Button variant="ghost" className="px-3 py-2">View all</Button>
+                <Button variant="ghost" className="px-3 py-2" onClick={() => navigate('/maintenance')}>View all</Button>
               </div>
               <div className="mt-4 space-y-3">
                 {maintenance.map((item) => (
@@ -111,17 +114,21 @@ export default function DashboardPage() {
 
             <Card className="p-5">
               <div className="flex items-center justify-between">
-                <h3 className="text-base font-semibold text-slate-900">Upcoming returns</h3>
-                <Button variant="ghost" className="px-3 py-2">Manage</Button>
+                <h3 className="text-base font-semibold text-slate-900">Department distribution</h3>
+                <ArrowRight size={16} className="text-slate-400" />
               </div>
               <div className="mt-4 space-y-3">
-                {returns.map((item) => (
-                  <div key={item.title} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-medium text-slate-800">{item.title}</p>
-                      <Badge tone="info">{item.date}</Badge>
+                {[
+                  ['Finance', '42 assets'],
+                  ['Operations', '67 assets'],
+                  ['HR', '24 assets'],
+                ].map(([name, count]) => (
+                  <div key={name} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <Users size={15} className="text-slate-400" />
+                      <span className="text-sm font-medium text-slate-700">{name}</span>
                     </div>
-                    <p className="mt-1 text-sm text-slate-500">{item.employee}</p>
+                    <span className="text-sm text-slate-500">{count}</span>
                   </div>
                 ))}
               </div>
@@ -130,59 +137,36 @@ export default function DashboardPage() {
         </div>
 
         <div className="space-y-6">
+          {/* FIXED: SVG Donut Chart */}
           <Card className="p-5">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-slate-900">Asset status</h3>
               <Badge tone="success">Healthy</Badge>
             </div>
-            <div className="mt-6 flex h-40 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50">
-              <div className="text-center">
-                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-violet-50 text-violet-600">
-                  <ClipboardList size={24} />
+            <div className="mt-6 flex flex-col items-center justify-center">
+              <div className="relative h-40 w-40">
+                {/* SVG Donut Chart */}
+                <svg viewBox="0 0 100 100" className="-rotate-90 h-full w-full drop-shadow-md">
+                  {/* Background Track (Available) */}
+                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#10b981" strokeWidth="16" />
+                  {/* Segment 2 (Allocated - 60%) */}
+                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#8b5cf6" strokeWidth="16" strokeDasharray="251.2" strokeDashoffset="100.48" className="transition-all duration-1000 ease-out" />
+                  {/* Segment 3 (Maintenance - 15%) */}
+                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#f59e0b" strokeWidth="16" strokeDasharray="251.2" strokeDashoffset="213.52" className="transition-all duration-1000 ease-out" />
+                </svg>
+                {/* Center Label */}
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-2xl font-bold text-slate-900">284</span>
+                  <span className="text-xs font-medium text-slate-500">Total</span>
                 </div>
-                <p className="mt-3 text-sm font-medium text-slate-600">Pie chart placeholder</p>
               </div>
-            </div>
-          </Card>
-
-          <Card className="p-5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-900">Department distribution</h3>
-              <ArrowRight size={16} className="text-slate-400" />
-            </div>
-            <div className="mt-4 space-y-3">
-              {[
-                ['Finance', '42 assets'],
-                ['Operations', '67 assets'],
-                ['HR', '24 assets'],
-                ['IT', '58 assets'],
-              ].map(([name, count]) => (
-                <div key={name} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <Users size={15} className="text-slate-400" />
-                    <span className="text-sm font-medium text-slate-700">{name}</span>
-                  </div>
-                  <span className="text-sm text-slate-500">{count}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card className="p-5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-900">Recent notifications</h3>
-              <Badge tone="neutral">3 new</Badge>
-            </div>
-            <div className="mt-4 space-y-3">
-              {notifications.map((item) => (
-                <div key={item.title} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium text-slate-800">{item.title}</p>
-                    <Badge tone={item.tone === 'warning' ? 'warning' : 'info'}>{item.tone}</Badge>
-                  </div>
-                  <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
-                </div>
-              ))}
+              
+              {/* Legend */}
+              <div className="mt-6 flex w-full justify-between px-2 text-sm">
+                <div className="flex items-center gap-2"><div className="h-3 w-3 rounded-full bg-violet-500"></div><span className="text-slate-600">Allocated</span></div>
+                <div className="flex items-center gap-2"><div className="h-3 w-3 rounded-full bg-emerald-500"></div><span className="text-slate-600">Available</span></div>
+                <div className="flex items-center gap-2"><div className="h-3 w-3 rounded-full bg-amber-500"></div><span className="text-slate-600">Repair</span></div>
+              </div>
             </div>
           </Card>
         </div>
