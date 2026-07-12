@@ -14,12 +14,17 @@ const prisma = new PrismaClient();
 async function send(recipientId, type, message, refId = null, refType = null) {
   try {
     const notification = await prisma.notification.create({
-      data: { recipientId, type, message, refId, refType },
+      data: { 
+        recipientId: BigInt(recipientId), 
+        type, 
+        message, 
+        refId: refId ? BigInt(refId) : null, 
+        refType 
+      },
     });
-    emitToUser(recipientId, 'notification:new', notification);
+    emitToUser(recipientId.toString(), 'notification:new', notification);
     return notification;
   } catch (err) {
-    // Never crash the main flow due to notification failure
     console.error('[NotificationService] Failed to send:', err.message);
   }
 }

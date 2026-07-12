@@ -1,16 +1,5 @@
 /**
  * routes/allocations.js — Asset Allocation & Transfer workflow
- *
- * GET  /api/allocations                        — List allocations (role-filtered)
- * POST /api/allocations                        — Allocate asset (conflict-checked)
- * GET  /api/allocations/:id                    — Get allocation detail
- * PUT  /api/allocations/:id/return             — Mark returned + condition notes
- *
- * Transfer workflow:
- * POST /api/allocations/:id/transfer-request   — Employee raises transfer request
- * GET  /api/allocations/transfers              — List pending transfers (manager view)
- * PUT  /api/allocations/transfers/:tid/approve — Approve transfer → re-allocate
- * PUT  /api/allocations/transfers/:tid/reject  — Reject transfer request
  */
 
 const express = require('express');
@@ -31,22 +20,22 @@ router.get('/', authenticate, async (req, res, next) => {
     // Role-based filtering
     let baseFilter = {};
     if (req.user.role === 'EMPLOYEE') {
-      baseFilter.employeeId = req.user.id;
+      baseFilter.employeeId = BigInt(req.user.id);
     } else if (req.user.role === 'DEPT_HEAD') {
       // Allow fetching for all employees in their department
       const deptEmployees = await prisma.employee.findMany({
-        where: { departmentId: req.user.departmentId },
+        where: { departmentId: BigInt(req.user.departmentId) },
         select: { id: true },
       });
       const empIds = deptEmployees.map(e => e.id);
       baseFilter.employeeId = { in: empIds };
-    } // ADMIN and ASSET_MANAGER see all
+    }
 
     const where = {
       ...baseFilter,
       ...(status && { status }),
-      ...(assetId && { assetId }),
-      ...(employeeId && req.user.role !== 'EMPLOYEE' && { employeeId }), // Allow managers to filter by specific employee
+      ...(assetId && { assetId: BigInt(assetId) }),
+      ...(employeeId && req.user.role !== 'EMPLOYEE' && { employeeId: BigInt(employeeId) }),
       ...(overdue === 'true' && { status: 'ACTIVE', expectedReturn: { lt: new Date() } }),
     };
 
@@ -80,7 +69,7 @@ router.post('/', authenticate, requireAssetManager, async (req, res, next) => {
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
     const allocation = await prisma.allocation.findUnique({
-      where: { id: req.params.id },
+      where: { id: BigInt(req.params.id) },
       include: {
         asset: true,
         employee: { select: { id: true, name: true, email: true } },
@@ -92,7 +81,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
     if (!allocation) return res.status(404).json({ error: 'Allocation not found' });
     
     // Security: employees can only view their own allocations
-    if (req.user.role === 'EMPLOYEE' && allocation.employeeId !== req.user.id) {
+    if (req.user.role === 'EMPLOYEE' && allocation.employeeId !== BigInt(req.user.id)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -105,7 +94,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // PUT /api/allocations/:id/return
 router.put('/:id/return', authenticate, requireAssetManager, async (req, res, next) => {
   try {
-    const result = await allocationService.returnAsset(req.params.id, req.body.conditionNotes, req.user);
+    const result = await allocationService.returnAsset(BigInt(req.params.id), req.body.conditionNotes, req.user);
     res.json(result);
   } catch (err) {
     next(err);
@@ -116,14 +105,14 @@ router.put('/:id/return', authenticate, requireAssetManager, async (req, res, ne
 router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
   try {
     const { targetEmployeeId, targetDeptId, reason } = req.body;
-    const allocationId = req.params.id;
+    const allocationId = BigInt(req.params.id);
 
     const allocation = await prisma.allocation.findUnique({ where: { id: allocationId } });
     if (!allocation) return res.status(404).json({ error: 'Allocation not found' });
     if (allocation.status !== 'ACTIVE') return res.status(400).json({ error: 'Only ACTIVE allocations can be transferred' });
     
     // Ensure the requester is the current holder (or an admin/manager acting on their behalf)
-    if (req.user.role === 'EMPLOYEE' && allocation.employeeId !== req.user.id) {
+    if (req.user.role === 'EMPLOYEE' && allocation.employeeId !== BigInt(req.user.id)) {
       return res.status(403).json({ error: 'You do not own this allocation' });
     }
 
@@ -132,9 +121,9 @@ router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
       const request = await tx.transferRequest.create({
         data: {
           allocationId,
-          requestedById: req.user.id,
-          targetEmployeeId: targetEmployeeId || null,
-          targetDeptId: targetDeptId || null,
+          requestedById: BigInt(req.user.id),
+          targetEmployeeId: targetEmployeeId ? BigInt(targetEmployeeId) : null,
+          targetDeptId: targetDeptId ? BigInt(targetDeptId) : null,
           reason,
           status: 'PENDING',
         },
@@ -149,10 +138,6 @@ router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
       return request;
     });
 
-    // Notify Asset Managers and Dept Heads about the new transfer request
-    // Note: In a real app, you'd target specific managers (e.g. Dept Head of the user).
-    // For the hackathon, emitting a generic event or logging it is often sufficient, 
-    // but you can implement specific fetching if desired.
     console.log(`[Transfer] New request ${transferRequest.id} created by ${req.user.name}`);
 
     res.status(201).json(transferRequest);
@@ -183,7 +168,7 @@ router.get('/transfers/pending', authenticate, requireDeptHead, async (req, res,
 router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req, res, next) => {
   try {
     const transferRequest = await prisma.transferRequest.findUnique({
-      where: { id: req.params.tid },
+      where: { id: BigInt(req.params.tid) },
       include: { allocation: true },
     });
 
@@ -194,7 +179,7 @@ router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req,
       // 1. Mark transfer request APPROVED
       await tx.transferRequest.update({
         where: { id: transferRequest.id },
-        data: { status: 'APPROVED', approvedById: req.user.id },
+        data: { status: 'APPROVED', approvedById: BigInt(req.user.id) },
       });
 
       // 2. Mark old allocation as TRANSFERRED
@@ -216,7 +201,7 @@ router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req,
       // 4. Log it
       await tx.activityLog.create({
         data: {
-          actorId: req.user.id,
+          actorId: BigInt(req.user.id),
           action: 'APPROVED_TRANSFER',
           entity: 'TRANSFER_REQUEST',
           entityId: transferRequest.id,
@@ -253,7 +238,7 @@ router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req,
 router.put('/transfers/:tid/reject', authenticate, requireDeptHead, async (req, res, next) => {
   try {
     const transferRequest = await prisma.transferRequest.findUnique({
-      where: { id: req.params.tid },
+      where: { id: BigInt(req.params.tid) },
       include: { allocation: true },
     });
 
@@ -263,15 +248,15 @@ router.put('/transfers/:tid/reject', authenticate, requireDeptHead, async (req, 
     await prisma.$transaction([
       prisma.transferRequest.update({
         where: { id: transferRequest.id },
-        data: { status: 'REJECTED', approvedById: req.user.id }, // We reuse approvedById for who processed it
+        data: { status: 'REJECTED', approvedById: BigInt(req.user.id) }, 
       }),
       prisma.allocation.update({
         where: { id: transferRequest.allocationId },
-        data: { status: 'ACTIVE' }, // Revert to active
+        data: { status: 'ACTIVE' }, 
       }),
       prisma.activityLog.create({
         data: {
-          actorId: req.user.id,
+          actorId: BigInt(req.user.id),
           action: 'REJECTED_TRANSFER',
           entity: 'TRANSFER_REQUEST',
           entityId: transferRequest.id,

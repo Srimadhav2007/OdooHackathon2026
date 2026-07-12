@@ -18,13 +18,18 @@ async function allocate(data, actor) {
   if (!assetId) throw Object.assign(new Error('assetId is required'), { status: 400 });
   if (!employeeId && !departmentId) throw Object.assign(new Error('employeeId or departmentId is required'), { status: 400 });
 
+  const bAssetId = BigInt(assetId);
+  const bEmployeeId = employeeId ? BigInt(employeeId) : null;
+  const bDepartmentId = departmentId ? BigInt(departmentId) : null;
+  const bActorId = BigInt(actor.id);
+
   // 1. Fetch asset
-  const asset = await prisma.asset.findUnique({ where: { id: assetId } });
+  const asset = await prisma.asset.findUnique({ where: { id: bAssetId } });
   if (!asset) throw Object.assign(new Error('Asset not found'), { status: 404 });
 
   // 2. Check for existing active allocation
   const existing = await prisma.allocation.findFirst({
-    where: { assetId, status: 'ACTIVE' },
+    where: { assetId: bAssetId, status: 'ACTIVE' },
     include: { employee: true, department: true },
   });
 
@@ -38,9 +43,9 @@ async function allocate(data, actor) {
   const [allocation] = await prisma.$transaction([
     prisma.allocation.create({
       data: {
-        assetId,
-        employeeId: employeeId || null,
-        departmentId: departmentId || null,
+        assetId: bAssetId,
+        employeeId: bEmployeeId,
+        departmentId: bDepartmentId,
         expectedReturn: expectedReturn ? new Date(expectedReturn) : null,
         conditionNotes: conditionNotes || null,
         status: 'ACTIVE',
@@ -48,24 +53,24 @@ async function allocate(data, actor) {
       include: { employee: true, department: true, asset: true },
     }),
     prisma.asset.update({
-      where: { id: assetId },
+      where: { id: bAssetId },
       data: { status: 'ALLOCATED' },
     }),
     prisma.activityLog.create({
       data: {
-        actorId: actor.id,
+        actorId: bActorId,
         action: 'ALLOCATED_ASSET',
         entity: 'ASSET',
-        entityId: assetId,
-        metadata: { employeeId, departmentId },
+        entityId: bAssetId,
+        metadata: { employeeId: bEmployeeId?.toString(), departmentId: bDepartmentId?.toString() },
       },
     }),
   ]);
 
   // 5. Notify the allocated employee
-  if (employeeId) {
+  if (bEmployeeId) {
     await notificationService.send(
-      employeeId,
+      bEmployeeId,
       'ASSET_ASSIGNED',
       `You have been assigned asset: ${asset.tag} (${asset.name})`,
       allocation.id,
@@ -83,8 +88,11 @@ async function allocate(data, actor) {
  * Mark an allocation as returned.
  */
 async function returnAsset(allocationId, conditionNotes, actor) {
+  const bAllocationId = BigInt(allocationId);
+  const bActorId = BigInt(actor.id);
+
   const allocation = await prisma.allocation.findUnique({
-    where: { id: allocationId },
+    where: { id: bAllocationId },
     include: { asset: true, employee: true },
   });
 
@@ -94,7 +102,7 @@ async function returnAsset(allocationId, conditionNotes, actor) {
   // Update allocation & asset in transaction
   await prisma.$transaction([
     prisma.allocation.update({
-      where: { id: allocationId },
+      where: { id: bAllocationId },
       data: {
         status: 'RETURNED',
         actualReturn: new Date(),
@@ -107,11 +115,11 @@ async function returnAsset(allocationId, conditionNotes, actor) {
     }),
     prisma.activityLog.create({
       data: {
-        actorId: actor.id,
+        actorId: bActorId,
         action: 'RETURNED_ASSET',
         entity: 'ASSET',
         entityId: allocation.assetId,
-        metadata: { allocationId, conditionNotes },
+        metadata: { allocationId: bAllocationId.toString(), conditionNotes },
       },
     }),
   ]);

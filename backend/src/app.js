@@ -4,6 +4,11 @@
  */
 
 require('dotenv').config();
+
+// Global polyfill to support native JSON serialization of BigInt values
+BigInt.prototype.toJSON = function () {
+  return this.toString();
+};
 const express = require('express');
 const cors = require('cors');
 const http = require('http');

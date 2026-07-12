@@ -1,12 +1,5 @@
 /**
  * routes/assets.js — Asset Registry
- *
- * GET    /api/assets              — Search/filter assets
- * POST   /api/assets              — Register new asset (auto-tag: AF-XXXX)
- * GET    /api/assets/:id          — Asset detail
- * PUT    /api/assets/:id          — Update asset info
- * GET    /api/assets/:id/history  — Allocation + maintenance history timeline
- * POST   /api/assets/:id/photo    — Upload asset photo (Multer)
  */
 
 const express = require('express');
@@ -26,7 +19,7 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${file.originalname}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
+const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
 
 // ─── Helper: generate next asset tag ──────────────────────────────────────────
 async function generateTag() {
@@ -50,7 +43,7 @@ router.get('/', authenticate, async (req, res, next) => {
     const where = {
       ...(tag && { tag: { contains: tag, mode: 'insensitive' } }),
       ...(status && { status }),
-      ...(categoryId && { categoryId }),
+      ...(categoryId && { categoryId: BigInt(categoryId) }),
       ...(location && { location: { contains: location, mode: 'insensitive' } }),
       ...(isBookable !== undefined && { isBookable: isBookable === 'true' }),
       ...(search && {
@@ -103,7 +96,7 @@ router.post('/', authenticate, requireAssetManager, async (req, res, next) => {
     if (!name) return res.status(400).json({ error: 'name is required' });
     if (!categoryId) return res.status(400).json({ error: 'categoryId is required' });
 
-    const category = await prisma.assetCategory.findUnique({ where: { id: categoryId } });
+    const category = await prisma.assetCategory.findUnique({ where: { id: BigInt(categoryId) } });
     if (!category) return res.status(404).json({ error: 'Category not found' });
 
     const tag = await generateTag();
@@ -112,7 +105,7 @@ router.post('/', authenticate, requireAssetManager, async (req, res, next) => {
       data: {
         tag,
         name,
-        categoryId,
+        categoryId: BigInt(categoryId),
         serialNumber: serialNumber || null,
         acquisitionDate: acquisitionDate ? new Date(acquisitionDate) : null,
         acquisitionCost: acquisitionCost ? parseFloat(acquisitionCost) : null,
@@ -125,10 +118,9 @@ router.post('/', authenticate, requireAssetManager, async (req, res, next) => {
       include: { category: true },
     });
 
-    // Log activity
     await prisma.activityLog.create({
       data: {
-        actorId: req.user.id,
+        actorId: BigInt(req.user.id),
         action: 'REGISTERED_ASSET',
         entity: 'ASSET',
         entityId: asset.id,
@@ -146,7 +138,7 @@ router.post('/', authenticate, requireAssetManager, async (req, res, next) => {
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
     const asset = await prisma.asset.findUnique({
-      where: { id: req.params.id },
+      where: { id: BigInt(req.params.id) },
       include: {
         category: true,
         allocations: {
@@ -180,7 +172,7 @@ router.put('/:id', authenticate, requireAssetManager, async (req, res, next) => 
     } = req.body;
 
     const asset = await prisma.asset.update({
-      where: { id: req.params.id },
+      where: { id: BigInt(req.params.id) },
       data: {
         ...(name && { name }),
         ...(serialNumber !== undefined && { serialNumber }),
@@ -196,7 +188,7 @@ router.put('/:id', authenticate, requireAssetManager, async (req, res, next) => 
 
     await prisma.activityLog.create({
       data: {
-        actorId: req.user.id,
+        actorId: BigInt(req.user.id),
         action: 'UPDATED_ASSET',
         entity: 'ASSET',
         entityId: asset.id,
@@ -211,15 +203,15 @@ router.put('/:id', authenticate, requireAssetManager, async (req, res, next) => 
   }
 });
 
-// GET /api/assets/:id/history — merged chronological timeline
+// GET /api/assets/:id/history
 router.get('/:id/history', authenticate, async (req, res, next) => {
   try {
-    const asset = await prisma.asset.findUnique({ where: { id: req.params.id } });
+    const asset = await prisma.asset.findUnique({ where: { id: BigInt(req.params.id) } });
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
     const [allocations, maintenance] = await Promise.all([
       prisma.allocation.findMany({
-        where: { assetId: req.params.id },
+        where: { assetId: BigInt(req.params.id) },
         include: {
           employee: { select: { id: true, name: true } },
           department: { select: { id: true, name: true } },
@@ -228,7 +220,7 @@ router.get('/:id/history', authenticate, async (req, res, next) => {
         orderBy: { createdAt: 'desc' },
       }),
       prisma.maintenanceRequest.findMany({
-        where: { assetId: req.params.id },
+        where: { assetId: BigInt(req.params.id) },
         include: { raisedBy: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'desc' },
       }),
@@ -268,7 +260,7 @@ router.post('/:id/photo', authenticate, requireAssetManager, upload.single('phot
 
     const photoUrl = `/uploads/${req.file.filename}`;
     const asset = await prisma.asset.update({
-      where: { id: req.params.id },
+      where: { id: BigInt(req.params.id) },
       data: { photoUrl },
     });
 

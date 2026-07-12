@@ -1,11 +1,5 @@
 /**
  * routes/categories.js — Asset Category management (Admin only)
- *
- * GET    /api/categories       — List all categories
- * POST   /api/categories       — Create category
- * GET    /api/categories/:id   — Get single category
- * PUT    /api/categories/:id   — Update category + custom fields schema
- * DELETE /api/categories/:id   — Delete (only if no assets assigned)
  */
 
 const express = require('express');
@@ -53,7 +47,7 @@ router.post('/', authenticate, requireAdmin, async (req, res, next) => {
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
     const category = await prisma.assetCategory.findUnique({
-      where: { id: req.params.id },
+      where: { id: BigInt(req.params.id) },
       include: {
         assets: {
           select: { id: true, tag: true, name: true, status: true, condition: true },
@@ -74,7 +68,7 @@ router.put('/:id', authenticate, requireAdmin, async (req, res, next) => {
   try {
     const { name, description, customFields } = req.body;
     const category = await prisma.assetCategory.update({
-      where: { id: req.params.id },
+      where: { id: BigInt(req.params.id) },
       data: {
         ...(name && { name }),
         ...(description !== undefined && { description }),
@@ -92,11 +86,11 @@ router.put('/:id', authenticate, requireAdmin, async (req, res, next) => {
 // DELETE /api/categories/:id
 router.delete('/:id', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const count = await prisma.asset.count({ where: { categoryId: req.params.id } });
+    const count = await prisma.asset.count({ where: { categoryId: BigInt(req.params.id) } });
     if (count > 0)
       return res.status(409).json({ error: `Cannot delete: ${count} asset(s) belong to this category` });
 
-    await prisma.assetCategory.delete({ where: { id: req.params.id } });
+    await prisma.assetCategory.delete({ where: { id: BigInt(req.params.id) } });
     res.json({ message: 'Category deleted successfully' });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Category not found' });
