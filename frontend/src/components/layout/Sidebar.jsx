@@ -9,10 +9,23 @@ import {
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { navigationItems } from "../../theme";
+import { useAuth } from "../../context/AuthContext";
 
 export default function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const { user } = useAuth();
+
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+    : 'U';
+
+  const roleLabel = {
+    ADMIN: 'Administrator',
+    ASSET_MANAGER: 'Asset Manager',
+    DEPT_HEAD: 'Dept Head',
+    EMPLOYEE: 'Employee',
+  }[user?.role] || user?.role || 'User';
 
   const groups = useMemo(() => navigationItems, []);
 
@@ -157,15 +170,15 @@ export default function Sidebar() {
           <div className="rounded-2xl bg-gradient-to-r from-violet-600 to-purple-600 p-4 text-white shadow-lg">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/20 font-bold">
-                AD
+                {initials}
               </div>
               {!collapsed && (
                 <div className="min-w-0">
                   <h3 className="truncate font-semibold">
-                    Alicia Dean
+                    {user?.name || 'User'}
                   </h3>
                   <p className="truncate text-xs text-violet-100">
-                    Administrator
+                    {roleLabel}
                   </p>
                 </div>
               )}
