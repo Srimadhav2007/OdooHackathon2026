@@ -16,19 +16,25 @@ const prisma = new PrismaClient();
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const { status, assetId, employeeId, overdue } = req.query;
+    const bActorId = BigInt(req.user.id);
     
     // Role-based filtering
     let baseFilter = {};
     if (req.user.role === 'EMPLOYEE') {
-      baseFilter.employeeId = BigInt(req.user.id);
+      baseFilter.employeeId = bActorId;
     } else if (req.user.role === 'DEPT_HEAD') {
-      // Allow fetching for all employees in their department
-      const deptEmployees = await prisma.employee.findMany({
-        where: { departmentId: BigInt(req.user.departmentId) },
-        select: { id: true },
-      });
-      const empIds = deptEmployees.map(e => e.id);
-      baseFilter.employeeId = { in: empIds };
+      if (req.user.departmentId) {
+        const bDeptId = BigInt(req.user.departmentId);
+        // DeptHead sees allocations directly to their department OR to employees in their department
+        baseFilter = {
+          OR: [
+            { departmentId: bDeptId },
+            { employee: { departmentId: bDeptId } }
+          ]
+        };
+      } else {
+        baseFilter.employeeId = bActorId;
+      }
     }
 
     const where = {
@@ -80,7 +86,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
 
     if (!allocation) return res.status(404).json({ error: 'Allocation not found' });
     
-    // Security: employees can only view their own allocations
+    // Security check: employees can only view their own allocations
     if (req.user.role === 'EMPLOYEE' && allocation.employeeId !== BigInt(req.user.id)) {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -106,14 +112,31 @@ router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
   try {
     const { targetEmployeeId, targetDeptId, reason } = req.body;
     const allocationId = BigInt(req.params.id);
+    const bActorId = BigInt(req.user.id);
 
     const allocation = await prisma.allocation.findUnique({ where: { id: allocationId } });
     if (!allocation) return res.status(404).json({ error: 'Allocation not found' });
     if (allocation.status !== 'ACTIVE') return res.status(400).json({ error: 'Only ACTIVE allocations can be transferred' });
     
-    // Ensure the requester is the current holder (or an admin/manager acting on their behalf)
-    if (req.user.role === 'EMPLOYEE' && allocation.employeeId !== BigInt(req.user.id)) {
-      return res.status(403).json({ error: 'You do not own this allocation' });
+    // Ensure the requester is the current holder or an authorized manager/admin
+    const isHolder = allocation.employeeId && allocation.employeeId === bActorId;
+    const isManager = req.user.role === 'ADMIN' || req.user.role === 'ASSET_MANAGER';
+    
+    let isAuthorized = isHolder || isManager;
+    if (!isAuthorized && req.user.role === 'DEPT_HEAD' && allocation.departmentId) {
+      // Check if actor is the head of the holding department
+      const deptCheck = await prisma.department.findFirst({
+        where: { id: allocation.departmentId, headId: bActorId }
+      });
+      if (deptCheck) isAuthorized = true;
+    }
+
+    if (!isAuthorized) {
+      return res.status(403).json({ error: 'Access denied. You do not hold or manage this allocation.' });
+    }
+
+    if (!targetEmployeeId && !targetDeptId) {
+      return res.status(400).json({ error: 'Target Employee or Target Department is required' });
     }
 
     const transferRequest = await prisma.$transaction(async (tx) => {
@@ -121,10 +144,10 @@ router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
       const request = await tx.transferRequest.create({
         data: {
           allocationId,
-          requestedById: BigInt(req.user.id),
+          requestedById: bActorId,
           targetEmployeeId: targetEmployeeId ? BigInt(targetEmployeeId) : null,
           targetDeptId: targetDeptId ? BigInt(targetDeptId) : null,
-          reason,
+          reason: reason || null,
           status: 'PENDING',
         },
       });
@@ -138,7 +161,16 @@ router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
       return request;
     });
 
-    console.log(`[Transfer] New request ${transferRequest.id} created by ${req.user.name}`);
+    // Notify Asset Managers / Admins
+    const managers = await prisma.employee.findMany({
+      where: { role: { in: ['ASSET_MANAGER', 'ADMIN'] }, status: true },
+      select: { id: true }
+    });
+    const managerIds = managers.map(m => m.id);
+
+    const asset = await prisma.asset.findUnique({ where: { id: allocation.assetId } });
+    const msg = `Transfer requested for asset "${asset?.name || 'Asset'}" by ${req.user.name}.`;
+    await notificationService.sendToMany(managerIds, 'TRANSFER_REQUESTED', msg, transferRequest.id, 'TRANSFER');
 
     res.status(201).json(transferRequest);
   } catch (err) {
@@ -150,14 +182,44 @@ router.post('/:id/transfer-request', authenticate, async (req, res, next) => {
 // GET /api/allocations/transfers/pending
 router.get('/transfers/pending', authenticate, requireDeptHead, async (req, res, next) => {
   try {
+    const bActorId = BigInt(req.user.id);
+    let baseFilter = {};
+
+    if (req.user.role === 'DEPT_HEAD') {
+      if (req.user.departmentId) {
+        const bDeptId = BigInt(req.user.departmentId);
+        // Dept head only sees requests involving their managed department
+        baseFilter = {
+          OR: [
+            { targetDeptId: bDeptId },
+            { allocation: { departmentId: bDeptId } },
+            { requestedBy: { departmentId: bDeptId } }
+          ]
+        };
+      } else {
+        baseFilter = {
+          OR: [
+            { requestedById: bActorId },
+            { targetEmployeeId: bActorId }
+          ]
+        };
+      }
+    }
+
     const transfers = await prisma.transferRequest.findMany({
-      where: { status: 'PENDING' },
+      where: {
+        status: 'PENDING',
+        ...baseFilter
+      },
       include: {
-        allocation: { include: { asset: { select: { tag: true, name: true } } } },
-        requestedBy: { select: { name: true } },
+        allocation: { include: { asset: { select: { id: true, tag: true, name: true } } } },
+        requestedBy: { select: { id: true, name: true } },
+        targetEmployee: { select: { id: true, name: true } },
+        targetDept: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
+
     res.json(transfers);
   } catch (err) {
     next(err);
@@ -167,19 +229,22 @@ router.get('/transfers/pending', authenticate, requireDeptHead, async (req, res,
 // PUT /api/allocations/transfers/:tid/approve
 router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req, res, next) => {
   try {
+    const bActorId = BigInt(req.user.id);
+    const bTid = BigInt(req.params.tid);
+
     const transferRequest = await prisma.transferRequest.findUnique({
-      where: { id: BigInt(req.params.tid) },
+      where: { id: bTid },
       include: { allocation: true },
     });
 
     if (!transferRequest) return res.status(404).json({ error: 'Transfer request not found' });
     if (transferRequest.status !== 'PENDING') return res.status(400).json({ error: 'Request is already processed' });
 
-    await prisma.$transaction(async (tx) => {
+    const newAllocation = await prisma.$transaction(async (tx) => {
       // 1. Mark transfer request APPROVED
       await tx.transferRequest.update({
-        where: { id: transferRequest.id },
-        data: { status: 'APPROVED', approvedById: BigInt(req.user.id) },
+        where: { id: bTid },
+        data: { status: 'APPROVED', approvedById: bActorId },
       });
 
       // 2. Mark old allocation as TRANSFERRED
@@ -189,7 +254,7 @@ router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req,
       });
 
       // 3. Create new allocation
-      await tx.allocation.create({
+      const newAlloc = await tx.allocation.create({
         data: {
           assetId: transferRequest.allocation.assetId,
           employeeId: transferRequest.targetEmployeeId,
@@ -198,37 +263,33 @@ router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req,
         },
       });
       
-      // 4. Log it
+      // 4. Log action
       await tx.activityLog.create({
         data: {
-          actorId: BigInt(req.user.id),
+          actorId: bActorId,
           action: 'APPROVED_TRANSFER',
           entity: 'TRANSFER_REQUEST',
-          entityId: transferRequest.id,
+          entityId: bTid,
         },
       });
+
+      return newAlloc;
     });
 
-    // Notify requester
-    await notificationService.send(
-      transferRequest.requestedById,
-      'TRANSFER_APPROVED',
-      'Your transfer request has been approved.',
-      transferRequest.id,
-      'TRANSFER_REQUEST'
-    );
+    const asset = await prisma.asset.findUnique({ where: { id: transferRequest.allocation.assetId } });
+    const assetName = asset?.name || 'Asset';
+
+    // Notify requester (approval)
+    const requesterMsg = `Your transfer request for asset "${assetName}" has been approved.`;
+    await notificationService.send(transferRequest.requestedById, 'TRANSFER_APPROVED', requesterMsg, bTid, 'TRANSFER');
+
     // Notify target employee if applicable
     if (transferRequest.targetEmployeeId) {
-      await notificationService.send(
-        transferRequest.targetEmployeeId,
-        'ASSET_ASSIGNED',
-        'An asset has been transferred to you.',
-        transferRequest.allocationId,
-        'ALLOCATION'
-      );
+      const targetMsg = `Asset "${assetName}" has been transferred to you.`;
+      await notificationService.send(transferRequest.targetEmployeeId, 'ASSET_ASSIGNED', targetMsg, newAllocation.id, 'ALLOCATION');
     }
 
-    res.json({ message: 'Transfer approved successfully' });
+    res.json({ message: 'Transfer approved successfully', newAllocation });
   } catch (err) {
     next(err);
   }
@@ -237,8 +298,11 @@ router.put('/transfers/:tid/approve', authenticate, requireDeptHead, async (req,
 // PUT /api/allocations/transfers/:tid/reject
 router.put('/transfers/:tid/reject', authenticate, requireDeptHead, async (req, res, next) => {
   try {
+    const bActorId = BigInt(req.user.id);
+    const bTid = BigInt(req.params.tid);
+
     const transferRequest = await prisma.transferRequest.findUnique({
-      where: { id: BigInt(req.params.tid) },
+      where: { id: bTid },
       include: { allocation: true },
     });
 
@@ -247,8 +311,8 @@ router.put('/transfers/:tid/reject', authenticate, requireDeptHead, async (req, 
 
     await prisma.$transaction([
       prisma.transferRequest.update({
-        where: { id: transferRequest.id },
-        data: { status: 'REJECTED', approvedById: BigInt(req.user.id) }, 
+        where: { id: bTid },
+        data: { status: 'REJECTED', approvedById: bActorId }, 
       }),
       prisma.allocation.update({
         where: { id: transferRequest.allocationId },
@@ -256,23 +320,21 @@ router.put('/transfers/:tid/reject', authenticate, requireDeptHead, async (req, 
       }),
       prisma.activityLog.create({
         data: {
-          actorId: BigInt(req.user.id),
+          actorId: bActorId,
           action: 'REJECTED_TRANSFER',
           entity: 'TRANSFER_REQUEST',
-          entityId: transferRequest.id,
+          entityId: bTid,
         },
       }),
     ]);
 
-    await notificationService.send(
-      transferRequest.requestedById,
-      'TRANSFER_REJECTED',
-      'Your transfer request was rejected.',
-      transferRequest.id,
-      'TRANSFER_REQUEST'
-    );
+    const asset = await prisma.asset.findUnique({ where: { id: transferRequest.allocation.assetId } });
+    const assetName = asset?.name || 'Asset';
 
-    res.json({ message: 'Transfer rejected successfully' });
+    const requesterMsg = `Your transfer request for asset "${assetName}" has been rejected.`;
+    await notificationService.send(transferRequest.requestedById, 'TRANSFER_REJECTED', requesterMsg, bTid, 'TRANSFER');
+
+    res.json({ message: 'Transfer request rejected successfully' });
   } catch (err) {
     next(err);
   }

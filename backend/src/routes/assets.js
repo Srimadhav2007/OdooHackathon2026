@@ -19,10 +19,10 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${file.originalname}`);
   },
 });
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
+const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
 
-// ─── Helper: generate next asset tag ──────────────────────────────────────────
-async function generateTag() {
+// Helper to generate next asset tag: AF-0001, AF-0002, etc.
+async function generateNextTag() {
   const last = await prisma.asset.findFirst({
     orderBy: { tag: 'desc' },
     select: { tag: true },
@@ -53,6 +53,14 @@ router.get('/', authenticate, async (req, res, next) => {
           { serialNumber: { contains: search, mode: 'insensitive' } },
         ],
       }),
+      ...(departmentId && {
+        allocations: {
+          some: {
+            departmentId: BigInt(departmentId),
+            status: 'ACTIVE'
+          }
+        }
+      })
     };
 
     const [assets, total] = await Promise.all([
@@ -77,8 +85,11 @@ router.get('/', authenticate, async (req, res, next) => {
     ]);
 
     res.json({
-      data: assets,
-      meta: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) },
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(total / Number(limit)),
+      assets
     });
   } catch (err) {
     next(err);
@@ -99,7 +110,7 @@ router.post('/', authenticate, requireAssetManager, async (req, res, next) => {
     const category = await prisma.assetCategory.findUnique({ where: { id: BigInt(categoryId) } });
     if (!category) return res.status(404).json({ error: 'Category not found' });
 
-    const tag = await generateTag();
+    const tag = await generateNextTag();
 
     const asset = await prisma.asset.create({
       data: {
@@ -166,19 +177,26 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // PUT /api/assets/:id
 router.put('/:id', authenticate, requireAssetManager, async (req, res, next) => {
   try {
-    const {
-      name, serialNumber, acquisitionDate, acquisitionCost,
-      condition, location, isBookable, customValues,
-    } = req.body;
+    const { name, categoryId, serialNumber, acquisitionDate, acquisitionCost, condition, location, isBookable, customValues } = req.body;
+    const bId = BigInt(req.params.id);
+
+    const assetCheck = await prisma.asset.findUnique({ where: { id: bId } });
+    if (!assetCheck) return res.status(404).json({ error: 'Asset not found' });
+
+    if (categoryId) {
+      const catCheck = await prisma.assetCategory.findUnique({ where: { id: BigInt(categoryId) } });
+      if (!catCheck) return res.status(404).json({ error: 'Category not found' });
+    }
 
     const asset = await prisma.asset.update({
-      where: { id: BigInt(req.params.id) },
+      where: { id: bId },
       data: {
         ...(name && { name }),
+        ...(categoryId && { categoryId: BigInt(categoryId) }),
         ...(serialNumber !== undefined && { serialNumber }),
-        ...(acquisitionDate && { acquisitionDate: new Date(acquisitionDate) }),
-        ...(acquisitionCost !== undefined && { acquisitionCost: parseFloat(acquisitionCost) }),
-        ...(condition && { condition }),
+        ...(acquisitionDate !== undefined && { acquisitionDate: acquisitionDate ? new Date(acquisitionDate) : null }),
+        ...(acquisitionCost !== undefined && { acquisitionCost: acquisitionCost ? parseFloat(acquisitionCost) : null }),
+        ...(condition !== undefined && { condition }),
         ...(location !== undefined && { location }),
         ...(isBookable !== undefined && { isBookable: isBookable === true || isBookable === 'true' }),
         ...(customValues !== undefined && { customValues }),
@@ -206,12 +224,13 @@ router.put('/:id', authenticate, requireAssetManager, async (req, res, next) => 
 // GET /api/assets/:id/history
 router.get('/:id/history', authenticate, async (req, res, next) => {
   try {
-    const asset = await prisma.asset.findUnique({ where: { id: BigInt(req.params.id) } });
+    const bId = BigInt(req.params.id);
+    const asset = await prisma.asset.findUnique({ where: { id: bId } });
     if (!asset) return res.status(404).json({ error: 'Asset not found' });
 
     const [allocations, maintenance] = await Promise.all([
       prisma.allocation.findMany({
-        where: { assetId: BigInt(req.params.id) },
+        where: { assetId: bId },
         include: {
           employee: { select: { id: true, name: true } },
           department: { select: { id: true, name: true } },
@@ -220,7 +239,7 @@ router.get('/:id/history', authenticate, async (req, res, next) => {
         orderBy: { createdAt: 'desc' },
       }),
       prisma.maintenanceRequest.findMany({
-        where: { assetId: BigInt(req.params.id) },
+        where: { assetId: bId },
         include: { raisedBy: { select: { id: true, name: true } } },
         orderBy: { createdAt: 'desc' },
       }),
@@ -247,7 +266,7 @@ router.get('/:id/history', authenticate, async (req, res, next) => {
       })),
     ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    res.json({ assetTag: asset.tag, assetName: asset.name, timeline });
+    res.json(timeline);
   } catch (err) {
     next(err);
   }
@@ -256,15 +275,19 @@ router.get('/:id/history', authenticate, async (req, res, next) => {
 // POST /api/assets/:id/photo
 router.post('/:id/photo', authenticate, requireAssetManager, upload.single('photo'), async (req, res, next) => {
   try {
+    const bId = BigInt(req.params.id);
     if (!req.file) return res.status(400).json({ error: 'No photo file provided' });
+
+    const assetCheck = await prisma.asset.findUnique({ where: { id: bId } });
+    if (!assetCheck) return res.status(404).json({ error: 'Asset not found' });
 
     const photoUrl = `/uploads/${req.file.filename}`;
     const asset = await prisma.asset.update({
-      where: { id: BigInt(req.params.id) },
+      where: { id: bId },
       data: { photoUrl },
     });
 
-    res.json({ message: 'Photo uploaded successfully', photoUrl, assetId: asset.id });
+    res.json({ message: 'Asset photo uploaded successfully', photoUrl, assetId: asset.id });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Asset not found' });
     next(err);

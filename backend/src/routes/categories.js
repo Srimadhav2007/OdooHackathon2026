@@ -14,8 +14,10 @@ const prisma = new PrismaClient();
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const categories = await prisma.assetCategory.findMany({
-      include: { _count: { select: { assets: true } } },
       orderBy: { name: 'asc' },
+      include: {
+        _count: { select: { assets: true } }
+      }
     });
     res.json(categories);
   } catch (err) {
@@ -27,15 +29,30 @@ router.get('/', authenticate, async (req, res, next) => {
 router.post('/', authenticate, requireAdmin, async (req, res, next) => {
   try {
     const { name, description, customFields } = req.body;
-    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+
+    // Check uniqueness
+    const existing = await prisma.assetCategory.findUnique({
+      where: { name: name.trim() }
+    });
+    if (existing) {
+      return res.status(409).json({ error: 'Category name already exists' });
+    }
 
     const category = await prisma.assetCategory.create({
       data: {
-        name,
+        name: name.trim(),
         description: description || null,
-        customFields: customFields || null,
+        customFields: customFields || null
       },
+      include: {
+        _count: { select: { assets: true } }
+      }
     });
+
     res.status(201).json(category);
   } catch (err) {
     if (err.code === 'P2002') return res.status(409).json({ error: 'Category name already exists' });
@@ -50,7 +67,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
       where: { id: BigInt(req.params.id) },
       include: {
         assets: {
-          select: { id: true, tag: true, name: true, status: true, condition: true },
+          select: { id: true, tag: true, name: true, status: true, condition: true, location: true },
           take: 20,
         },
         _count: { select: { assets: true } },
@@ -66,15 +83,34 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // PUT /api/categories/:id
 router.put('/:id', authenticate, requireAdmin, async (req, res, next) => {
   try {
+    const bId = BigInt(req.params.id);
     const { name, description, customFields } = req.body;
+
+    const cat = await prisma.assetCategory.findUnique({ where: { id: bId } });
+    if (!cat) return res.status(404).json({ error: 'Category not found' });
+
+    // Check name uniqueness if changing
+    if (name && name.trim() !== cat.name) {
+      const existing = await prisma.assetCategory.findUnique({
+        where: { name: name.trim() }
+      });
+      if (existing) {
+        return res.status(409).json({ error: 'Category name already exists' });
+      }
+    }
+
     const category = await prisma.assetCategory.update({
-      where: { id: BigInt(req.params.id) },
+      where: { id: bId },
       data: {
-        ...(name && { name }),
+        ...(name && { name: name.trim() }),
         ...(description !== undefined && { description }),
         ...(customFields !== undefined && { customFields }),
       },
+      include: {
+        _count: { select: { assets: true } }
+      }
     });
+
     res.json(category);
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Category not found' });
@@ -86,11 +122,18 @@ router.put('/:id', authenticate, requireAdmin, async (req, res, next) => {
 // DELETE /api/categories/:id
 router.delete('/:id', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const count = await prisma.asset.count({ where: { categoryId: BigInt(req.params.id) } });
-    if (count > 0)
-      return res.status(409).json({ error: `Cannot delete: ${count} asset(s) belong to this category` });
+    const bId = BigInt(req.params.id);
 
-    await prisma.assetCategory.delete({ where: { id: BigInt(req.params.id) } });
+    const cat = await prisma.assetCategory.findUnique({ where: { id: bId } });
+    if (!cat) return res.status(404).json({ error: 'Category not found' });
+
+    // Reject if assets exist under this category
+    const count = await prisma.asset.count({ where: { categoryId: bId } });
+    if (count > 0) {
+      return res.status(409).json({ error: `Cannot delete: ${count} asset(s) belong to this category` });
+    }
+
+    await prisma.assetCategory.delete({ where: { id: bId } });
     res.json({ message: 'Category deleted successfully' });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Category not found' });

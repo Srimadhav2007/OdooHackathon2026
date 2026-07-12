@@ -4,108 +4,148 @@
 
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/db');
+const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const { requireDeptHead } = require('../middleware/roleGuard');
+const allocationService = require('../services/allocationService');
+
+const prisma = new PrismaClient();
 
 // GET /api/reports/dashboard
 router.get('/dashboard', authenticate, async (req, res, next) => {
   try {
-    const actor = req.user;
-    
-    // Default queries
-    let assetsAvailableQuery = "SELECT COUNT(*)::int FROM asset WHERE status = 'AVAILABLE'";
-    let assetsAllocatedQuery = "SELECT COUNT(*)::int FROM asset WHERE status = 'ALLOCATED'";
-    let maintenanceTodayQuery = "SELECT COUNT(*)::int FROM maintenance_request WHERE DATE(created_at) = CURRENT_DATE";
-    let activeBookingsQuery = "SELECT COUNT(*)::int FROM booking WHERE status IN ('UPCOMING', 'ONGOING')";
-    let pendingTransfersQuery = "SELECT COUNT(*)::int FROM transfer_request WHERE status = 'PENDING'";
-    let upcomingReturnsQuery = "SELECT COUNT(*)::int FROM allocation WHERE status = 'ACTIVE' AND expected_return >= CURRENT_DATE AND expected_return <= CURRENT_DATE + INTERVAL '7 days'";
-    let overdueReturnsQuery = "SELECT COUNT(*)::int FROM allocation WHERE status = 'ACTIVE' AND expected_return < CURRENT_DATE";
-    
-    const params = [];
+    const role = req.user.role;
+    const bActorId = BigInt(req.user.id);
+    const bDeptId = req.user.departmentId ? BigInt(req.user.departmentId) : null;
 
-    // Filter by department if DeptHead
-    if (actor.role === 'DEPT_HEAD') {
-      const deptsRes = await pool.query('SELECT id FROM department WHERE head_employee_id = $1', [actor.id]);
-      if (deptsRes.rows.length > 0) {
-        const deptIds = deptsRes.rows.map(r => r.id);
-        params.push(deptIds);
+    let assetFilter = {};
+    let allocFilter = {};
+    let maintFilter = {};
+    let bookingFilter = {};
+    let transferFilter = {};
 
-        assetsAvailableQuery = `
-          SELECT COUNT(*)::int FROM asset a
-          WHERE a.status = 'AVAILABLE' AND a.location IN (
-            SELECT location FROM asset ast 
-            JOIN allocation alloc ON alloc.asset_id = ast.id AND alloc.status = 'ACTIVE'
-            WHERE alloc.department_id = ANY($1)
-          )
-        `;
-        assetsAllocatedQuery = `
-          SELECT COUNT(*)::int FROM allocation WHERE status = 'ACTIVE' AND department_id = ANY($1)
-        `;
-        maintenanceTodayQuery = `
-          SELECT COUNT(*)::int FROM maintenance_request m
-          JOIN employee req ON m.raised_by_id = req.id
-          WHERE DATE(m.created_at) = CURRENT_DATE AND req.department_id = ANY($1)
-        `;
-        activeBookingsQuery = `
-          SELECT COUNT(*)::int FROM booking b
-          JOIN employee emp ON b.user_id = emp.id
-          WHERE b.status IN ('UPCOMING', 'ONGOING') AND emp.department_id = ANY($1)
-        `;
-        pendingTransfersQuery = `
-          SELECT COUNT(*)::int FROM transfer_request tr
-          JOIN allocation a ON tr.allocation_id = a.id
-          WHERE tr.status = 'PENDING' AND (a.department_id = ANY($1) OR tr.target_department_id = ANY($1))
-        `;
-        upcomingReturnsQuery = `
-          SELECT COUNT(*)::int FROM allocation 
-          WHERE status = 'ACTIVE' AND department_id = ANY($1) AND expected_return >= CURRENT_DATE AND expected_return <= CURRENT_DATE + INTERVAL '7 days'
-        `;
-        overdueReturnsQuery = `
-          SELECT COUNT(*)::int FROM allocation 
-          WHERE status = 'ACTIVE' AND department_id = ANY($1) AND expected_return < CURRENT_DATE
-        `;
+    if (role === 'EMPLOYEE') {
+      assetFilter = { allocations: { some: { employeeId: bActorId, status: 'ACTIVE' } } };
+      allocFilter = { employeeId: bActorId };
+      maintFilter = { raisedById: bActorId };
+      bookingFilter = { userId: bActorId };
+      transferFilter = { OR: [{ requestedById: bActorId }, { targetEmployeeId: bActorId }] };
+    } else if (role === 'DEPT_HEAD') {
+      if (bDeptId) {
+        assetFilter = {
+          allocations: {
+            some: {
+              OR: [
+                { departmentId: bDeptId },
+                { employee: { departmentId: bDeptId } }
+              ],
+              status: 'ACTIVE'
+            }
+          }
+        };
+        allocFilter = {
+          OR: [
+            { departmentId: bDeptId },
+            { employee: { departmentId: bDeptId } }
+          ]
+        };
+        maintFilter = { raisedBy: { departmentId: bDeptId } };
+        bookingFilter = { user: { departmentId: bDeptId } };
+        transferFilter = {
+          OR: [
+            { targetDeptId: bDeptId },
+            { allocation: { departmentId: bDeptId } },
+            { requestedBy: { departmentId: bDeptId } }
+          ]
+        };
+      } else {
+        // Fallback to self
+        assetFilter = { allocations: { some: { employeeId: bActorId, status: 'ACTIVE' } } };
+        allocFilter = { employeeId: bActorId };
+        maintFilter = { raisedById: bActorId };
+        bookingFilter = { userId: bActorId };
+        transferFilter = { OR: [{ requestedById: bActorId }, { targetEmployeeId: bActorId }] };
       }
-    } else if (actor.role === 'EMPLOYEE') {
-      // Employees can only see their own metrics
-      params.push(actor.id);
-      assetsAvailableQuery = "SELECT 0";
-      assetsAllocatedQuery = `SELECT COUNT(*)::int FROM allocation WHERE status = 'ACTIVE' AND employee_id = $1`;
-      maintenanceTodayQuery = `SELECT COUNT(*)::int FROM maintenance_request WHERE raised_by_id = $1 AND DATE(created_at) = CURRENT_DATE`;
-      activeBookingsQuery = `SELECT COUNT(*)::int FROM booking WHERE user_id = $1 AND status IN ('UPCOMING', 'ONGOING')`;
-      pendingTransfersQuery = `SELECT COUNT(*)::int FROM transfer_request WHERE requested_by_id = $1 AND status = 'PENDING'`;
-      upcomingReturnsQuery = `SELECT COUNT(*)::int FROM allocation WHERE employee_id = $1 AND status = 'ACTIVE' AND expected_return >= CURRENT_DATE AND expected_return <= CURRENT_DATE + INTERVAL '7 days'`;
-      overdueReturnsQuery = `SELECT COUNT(*)::int FROM allocation WHERE employee_id = $1 AND status = 'ACTIVE' AND expected_return < CURRENT_DATE`;
     }
 
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const sevenDaysFromNow = new Date();
+    sevenDaysFromNow.setDate(sevenDaysFromNow.getDate() + 7);
+
     const [
-      availableRes,
-      allocatedRes,
-      maintRes,
-      bookingsRes,
-      transfersRes,
-      upcomingRes,
-      overdueRes
+      assetsAvailable,
+      assetsAllocated,
+      maintenanceToday,
+      activeBookings,
+      pendingTransfers,
+      upcomingReturns,
+      overdueReturns
     ] = await Promise.all([
-      pool.query(assetsAvailableQuery, params),
-      pool.query(assetsAllocatedQuery, params),
-      pool.query(maintenanceTodayQuery, params),
-      pool.query(activeBookingsQuery, params),
-      pool.query(pendingTransfersQuery, params),
-      pool.query(upcomingReturnsQuery, params),
-      pool.query(overdueReturnsQuery, params)
+      // 1. Available assets
+      role === 'ADMIN' || role === 'ASSET_MANAGER'
+        ? prisma.asset.count({ where: { status: 'AVAILABLE' } })
+        : prisma.asset.count({ where: { ...assetFilter, status: 'AVAILABLE' } }),
+
+      // 2. Allocated assets
+      prisma.asset.count({ where: { ...assetFilter, status: 'ALLOCATED' } }),
+
+      // 3. Maintenance requests today
+      prisma.maintenanceRequest.count({
+        where: {
+          ...maintFilter,
+          createdAt: { gte: todayStart }
+        }
+      }),
+
+      // 4. Active/Upcoming bookings
+      prisma.booking.count({
+        where: {
+          ...bookingFilter,
+          status: { in: ['UPCOMING', 'ONGOING'] }
+        }
+      }),
+
+      // 5. Pending transfers
+      prisma.transferRequest.count({
+        where: {
+          ...transferFilter,
+          status: 'PENDING'
+        }
+      }),
+
+      // 6. Upcoming returns
+      prisma.allocation.count({
+        where: {
+          ...allocFilter,
+          status: 'ACTIVE',
+          expectedReturn: {
+            gte: new Date(),
+            lte: sevenDaysFromNow
+          }
+        }
+      }),
+
+      // 7. Overdue returns
+      prisma.allocation.count({
+        where: {
+          ...allocFilter,
+          status: 'ACTIVE',
+          expectedReturn: { lt: new Date() }
+        }
+      })
     ]);
 
     res.json({
-      assetsAvailable: availableRes.rows[0].count || 0,
-      assetsAllocated: allocatedRes.rows[0].count || 0,
-      maintenanceToday: maintRes.rows[0].count || 0,
-      activeBookings: bookingsRes.rows[0].count || 0,
-      pendingTransfers: transfersRes.rows[0].count || 0,
-      upcomingReturns: upcomingRes.rows[0].count || 0,
-      overdueReturns: overdueRes.rows[0].count || 0
+      assetsAvailable,
+      assetsAllocated,
+      maintenanceToday,
+      activeBookings,
+      pendingTransfers,
+      upcomingReturns,
+      overdueReturns
     });
-
   } catch (err) {
     next(err);
   }
@@ -115,24 +155,42 @@ router.get('/dashboard', authenticate, async (req, res, next) => {
 router.get('/utilization', authenticate, requireDeptHead, async (req, res, next) => {
   try {
     const { from, to } = req.query;
+    const end = to ? new Date(to) : new Date();
+    const start = from ? new Date(from) : new Date();
+    if (!from) start.setDate(end.getDate() - 30); // Default to last 30 days
 
-    const startDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 3600 * 1000); // last 30 days
-    const endDate = to ? new Date(to) : new Date();
+    const allocations = await prisma.allocation.findMany({
+      where: {
+        createdAt: { lte: end },
+        OR: [
+          { status: 'ACTIVE' },
+          { status: 'RETURNED' },
+          { status: 'TRANSFERRED' }
+        ]
+      },
+      select: { createdAt: true, actualReturn: true }
+    });
 
-    const result = await pool.query(
-      `
-      SELECT 
-        DATE(created_at) AS date,
-        COUNT(*)::int AS "allocatedCount"
-      FROM allocation
-      WHERE created_at >= $1 AND created_at <= $2
-      GROUP BY DATE(created_at)
-      ORDER BY date ASC
-      `,
-      [startDate, endDate]
-    );
+    const trend = [];
+    const curr = new Date(start);
+    while (curr <= end) {
+      const dateStr = curr.toISOString().split('T')[0];
+      const dayStart = new Date(curr);
+      dayStart.setHours(0,0,0,0);
+      const dayEnd = new Date(curr);
+      dayEnd.setHours(23,59,59,999);
 
-    res.json(result.rows);
+      const count = allocations.filter(a => {
+        const created = new Date(a.createdAt);
+        const returned = a.actualReturn ? new Date(a.actualReturn) : null;
+        return created <= dayEnd && (!returned || returned >= dayStart);
+      }).length;
+
+      trend.push({ date: dateStr, allocatedCount: count });
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    res.json(trend);
   } catch (err) {
     next(err);
   }
@@ -141,22 +199,46 @@ router.get('/utilization', authenticate, requireDeptHead, async (req, res, next)
 // GET /api/reports/maintenance
 router.get('/maintenance', authenticate, requireDeptHead, async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT 
-        c.name AS category,
-        COUNT(*)::int AS count,
-        COALESCE(AVG(EXTRACT(EPOCH FROM (m.resolved_at - m.created_at)) / 3600), 0)::double precision AS "avgResolutionHours"
-      FROM maintenance_request m
-      JOIN asset a ON m.asset_id = a.id
-      JOIN asset_category c ON a.category_id = c.id
-      WHERE m.status = 'RESOLVED'
-      GROUP BY c.name
-      ORDER BY count DESC
-      `
-    );
+    const categories = await prisma.assetCategory.findMany({
+      include: {
+        assets: {
+          include: {
+            maintenanceRequests: true
+          }
+        }
+      }
+    });
 
-    res.json(result.rows);
+    const report = categories.map(cat => {
+      let totalRequests = 0;
+      let totalResolutionTimeMs = 0;
+      let resolvedCount = 0;
+
+      cat.assets.forEach(asset => {
+        asset.maintenanceRequests.forEach(req => {
+          totalRequests++;
+          if (req.status === 'RESOLVED' && req.resolvedAt) {
+            resolvedCount++;
+            const created = new Date(req.createdAt);
+            const resolved = new Date(req.resolvedAt);
+            totalResolutionTimeMs += (resolved - created);
+          }
+        });
+      });
+
+      const avgResolutionHours = resolvedCount > 0
+        ? parseFloat((totalResolutionTimeMs / (1000 * 60 * 60 * resolvedCount)).toFixed(2))
+        : 0;
+
+      return {
+        categoryId: cat.id,
+        categoryName: cat.name,
+        count: totalRequests,
+        avgResolutionHours
+      };
+    });
+
+    res.json(report);
   } catch (err) {
     next(err);
   }
@@ -165,30 +247,30 @@ router.get('/maintenance', authenticate, requireDeptHead, async (req, res, next)
 // GET /api/reports/allocations
 router.get('/allocations', authenticate, requireDeptHead, async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT 
-        d.name AS department,
-        (SELECT COUNT(*)::int FROM allocation a WHERE a.department_id = d.id AND a.status = 'ACTIVE') AS "totalAssets",
-        (SELECT COUNT(*)::int FROM employee e WHERE e.department_id = d.id AND e.status = true) AS "totalEmployees"
-      FROM department d
-      WHERE d.status = true
-      ORDER BY d.name ASC
-      `
-    );
+    const depts = await prisma.department.findMany({
+      include: {
+        employees: { select: { id: true } },
+        allocations: { where: { status: 'ACTIVE' } }
+      }
+    });
 
-    const allocations = result.rows.map(r => {
-      const totalAssets = r.totalAssets || 0;
-      const totalEmployees = r.totalEmployees || 0;
+    const report = depts.map(dept => {
+      const totalAssets = dept.allocations.length;
+      const employeeCount = dept.employees.length;
+      const assetsPerEmployee = employeeCount > 0
+        ? parseFloat((totalAssets / employeeCount).toFixed(2))
+        : 0;
+
       return {
-        department: r.department,
+        departmentId: dept.id,
+        departmentName: dept.name,
         totalAssets,
-        totalEmployees,
-        assetsPerEmployee: totalEmployees > 0 ? parseFloat((totalAssets / totalEmployees).toFixed(2)) : 0
+        employeeCount,
+        assetsPerEmployee
       };
     });
 
-    res.json(allocations);
+    res.json(report);
   } catch (err) {
     next(err);
   }
@@ -197,20 +279,38 @@ router.get('/allocations', authenticate, requireDeptHead, async (req, res, next)
 // GET /api/reports/booking-heatmap
 router.get('/booking-heatmap', authenticate, requireDeptHead, async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT 
-        EXTRACT(DOW FROM start_time)::int AS weekday,
-        EXTRACT(HOUR FROM start_time)::int AS hour,
-        COUNT(*)::int AS count
-      FROM booking
-      WHERE status != 'CANCELLED'
-      GROUP BY EXTRACT(DOW FROM start_time), EXTRACT(HOUR FROM start_time)
-      ORDER BY weekday, hour
-      `
-    );
+    const bookings = await prisma.booking.findMany({
+      where: { status: { in: ['UPCOMING', 'ONGOING', 'COMPLETED'] } },
+      select: { startTime: true }
+    });
 
-    res.json(result.rows);
+    const heatmap = {};
+    for (let day = 0; day < 7; day++) {
+      heatmap[day] = {};
+      for (let hr = 0; hr < 24; hr++) {
+        heatmap[day][hr] = 0;
+      }
+    }
+
+    bookings.forEach(b => {
+      const date = new Date(b.startTime);
+      const day = date.getDay();
+      const hr = date.getHours();
+      heatmap[day][hr]++;
+    });
+
+    const result = [];
+    for (let day = 0; day < 7; day++) {
+      for (let hr = 0; hr < 24; hr++) {
+        result.push({
+          dayOfWeek: day,
+          hourOfDay: hr,
+          count: heatmap[day][hr]
+        });
+      }
+    }
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -219,29 +319,8 @@ router.get('/booking-heatmap', authenticate, requireDeptHead, async (req, res, n
 // GET /api/reports/overdue
 router.get('/overdue', authenticate, async (req, res, next) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT 
-        a.id,
-        a.asset_id AS "assetId",
-        a.employee_id AS "employeeId",
-        a.department_id AS "departmentId",
-        a.status,
-        a.expected_return AS "expectedReturn",
-        ast.name AS "assetName",
-        ast.tag AS "assetTag",
-        emp.name AS "employeeName",
-        dept.name AS "departmentName"
-      FROM allocation a
-      JOIN asset ast ON a.asset_id = ast.id
-      LEFT JOIN employee emp ON a.employee_id = emp.id
-      LEFT JOIN department dept ON a.department_id = dept.id
-      WHERE a.status = 'ACTIVE' AND a.expected_return < CURRENT_DATE
-      ORDER BY a.expected_return ASC
-      `
-    );
-
-    res.json(result.rows);
+    const overdue = await allocationService.getOverdue();
+    res.json(overdue);
   } catch (err) {
     next(err);
   }
@@ -250,69 +329,46 @@ router.get('/overdue', authenticate, async (req, res, next) => {
 // GET /api/reports/export/:type
 router.get('/export/:type', authenticate, requireDeptHead, async (req, res, next) => {
   try {
-    const { type } = req.params;
-    let csvData = '';
-    let filename = '';
+    const type = req.params.type;
+    let csvContent = '';
 
     if (type === 'assets') {
-      filename = 'assets_report.csv';
-      const result = await pool.query(
-        `SELECT tag, name, status, condition, location, acquisition_date FROM asset ORDER BY tag ASC`
-      );
-      csvData = 'Tag,Name,Status,Condition,Location,Acquisition Date\n';
-      result.rows.forEach(r => {
-        csvData += `"${r.tag}","${r.name}","${r.status}","${r.condition}","${r.location || ''}","${r.acquisition_date ? new Date(r.acquisition_date).toLocaleDateString() : ''}"\n`;
+      const assets = await prisma.asset.findMany({
+        include: { category: true }
+      });
+      csvContent = 'ID,Tag,Name,Category,Status,Condition,Location,Bookable\n';
+      assets.forEach(a => {
+        csvContent += `"${a.id}","${a.tag}","${a.name}","${a.category.name}","${a.status}","${a.condition || ''}","${a.location || ''}","${a.isBookable}"\n`;
       });
     } else if (type === 'allocations') {
-      filename = 'allocations_report.csv';
-      const result = await pool.query(
-        `
-        SELECT 
-          ast.tag AS asset_tag, 
-          ast.name AS asset_name, 
-          emp.name AS employee_name, 
-          dept.name AS department_name, 
-          a.status, 
-          a.expected_return 
-        FROM allocation a 
-        JOIN asset ast ON a.asset_id = ast.id 
-        LEFT JOIN employee emp ON a.employee_id = emp.id 
-        LEFT JOIN department dept ON a.department_id = dept.id
-        ORDER BY a.created_at DESC
-        `
-      );
-      csvData = 'Asset Tag,Asset Name,Employee Name,Department Name,Status,Expected Return\n';
-      result.rows.forEach(r => {
-        csvData += `"${r.asset_tag}","${r.asset_name}","${r.employee_name || ''}","${r.department_name || ''}","${r.status}","${r.expected_return ? new Date(r.expected_return).toLocaleDateString() : ''}"\n`;
+      const allocs = await prisma.allocation.findMany({
+        include: { asset: true, employee: true, department: true }
+      });
+      csvContent = 'ID,Asset Tag,Asset Name,Allocated To Type,Holder Name,Status,Expected Return,Actual Return\n';
+      allocs.forEach(a => {
+        const holderType = a.employeeId ? 'Employee' : 'Department';
+        const holderName = a.employee?.name ?? a.department?.name ?? 'Unknown';
+        const expRet = a.expectedReturn ? a.expectedReturn.toISOString().split('T')[0] : '';
+        const actRet = a.actualReturn ? a.actualReturn.toISOString().split('T')[0] : '';
+        csvContent += `"${a.id}","${a.asset.tag}","${a.asset.name}","${holderType}","${holderName}","${a.status}","${expRet}","${actRet}"\n`;
       });
     } else if (type === 'maintenance') {
-      filename = 'maintenance_report.csv';
-      const result = await pool.query(
-        `
-        SELECT 
-          m.id, 
-          ast.tag AS asset_tag, 
-          m.priority, 
-          m.status, 
-          m.description, 
-          m.created_at 
-        FROM maintenance_request m 
-        JOIN asset ast ON m.asset_id = ast.id 
-        ORDER BY m.created_at DESC
-        `
-      );
-      csvData = 'Request ID,Asset Tag,Priority,Status,Description,Created At\n';
-      result.rows.forEach(r => {
-        csvData += `"${r.id}","${r.asset_tag}","${r.priority}","${r.status}","${r.description.replace(/"/g, '""')}","${new Date(r.created_at).toLocaleString()}"\n`;
+      const requests = await prisma.maintenanceRequest.findMany({
+        include: { asset: true, raisedBy: true }
+      });
+      csvContent = 'ID,Asset Tag,Asset Name,Priority,Status,Raised By,Created At,Resolved At\n';
+      requests.forEach(r => {
+        const created = r.createdAt.toISOString();
+        const resolved = r.resolvedAt ? r.resolvedAt.toISOString() : '';
+        csvContent += `"${r.id}","${r.asset.tag}","${r.asset.name}","${r.priority}","${r.status}","${r.raisedBy.name}","${created}","${resolved}"\n`;
       });
     } else {
-      return res.status(400).json({ error: 'Invalid export type. Must be: assets, allocations, or maintenance.' });
+      return res.status(400).json({ error: 'Invalid export type. Supported: assets, allocations, maintenance' });
     }
 
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(csvData);
-
+    res.setHeader('Content-Disposition', `attachment; filename=${type}_report.csv`);
+    res.status(200).send(csvContent);
   } catch (err) {
     next(err);
   }

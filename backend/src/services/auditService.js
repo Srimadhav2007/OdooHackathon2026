@@ -3,105 +3,91 @@
  * Business logic for audit cycle lifecycle.
  */
 
-const pool = require('../config/db');
+const { PrismaClient } = require('@prisma/client');
 const notificationService = require('./notificationService');
+
+const prisma = new PrismaClient();
 
 /**
  * Close an audit cycle and apply discrepancy results to asset statuses.
  *
- * @param {string|number} cycleId
+ * @param {string} cycleId
  * @param {object} actor - req.user (Admin)
  */
 async function closeCycle(cycleId, actor) {
-  const client = await pool.connect();
+  const bCycleId = BigInt(cycleId);
+  const bActorId = BigInt(actor.id);
 
-  try {
-    await client.query('BEGIN');
+  const cycle = await prisma.auditCycle.findUnique({
+    where: { id: bCycleId }
+  });
 
-    // 1. Fetch cycle; verify status !== CLOSED
-    const cycleRes = await client.query('SELECT * FROM audit_cycle WHERE id = $1', [cycleId]);
-    if (cycleRes.rows.length === 0) {
-      throw Object.assign(new Error('Audit cycle not found'), { status: 404 });
-    }
-    const cycle = cycleRes.rows[0];
+  if (!cycle) {
+    throw Object.assign(new Error('Audit cycle not found'), { status: 404 });
+  }
 
-    if (cycle.status === 'CLOSED') {
-      throw Object.assign(new Error('Audit cycle is already closed'), { status: 400 });
-    }
+  if (cycle.status === 'CLOSED') {
+    throw Object.assign(new Error('Audit cycle is already closed'), { status: 400 });
+  }
 
-    // 2. Fetch all AuditResults for this cycle
-    const resultsRes = await client.query('SELECT * FROM audit_result WHERE cycle_id = $1', [cycleId]);
-    const results = resultsRes.rows;
+  // Fetch all audit results for this cycle
+  const results = await prisma.auditResult.findMany({
+    where: { cycleId: bCycleId }
+  });
 
-    let missing = 0;
-    let damaged = 0;
-    let verified = 0;
+  let missingCount = 0;
+  let damagedCount = 0;
+  let verifiedCount = 0;
 
+  await prisma.$transaction(async (tx) => {
+    // 1. Close the cycle
+    await tx.auditCycle.update({
+      where: { id: bCycleId },
+      data: { status: 'CLOSED' }
+    });
+
+    // 2. Loop through results and update asset properties
     for (const res of results) {
       if (res.verdict === 'MISSING') {
-        missing++;
-        // 3. For MISSING results: set asset.status = LOST
-        await client.query(
-          `UPDATE asset SET status = 'LOST' WHERE id = $1`,
-          [res.asset_id]
-        );
+        missingCount++;
+        await tx.asset.update({
+          where: { id: res.assetId },
+          data: { status: 'LOST' }
+        });
       } else if (res.verdict === 'DAMAGED') {
-        damaged++;
-        // 4. For DAMAGED results: set asset.condition = DAMAGED
-        await client.query(
-          `UPDATE asset SET condition = 'DAMAGED' WHERE id = $1`,
-          [res.asset_id]
-        );
-      } else if (res.verdict === 'VERIFIED') {
-        verified++;
+        damagedCount++;
+        await tx.asset.update({
+          where: { id: res.assetId },
+          data: { condition: 'DAMAGED' }
+        });
+      } else {
+        verifiedCount++;
       }
     }
 
-    // 5. Set cycle.status = CLOSED
-    await client.query(
-      `UPDATE audit_cycle SET status = 'CLOSED' WHERE id = $1`,
-      [cycleId]
-    );
+    // 3. Log activity
+    await tx.activityLog.create({
+      data: {
+        actorId: bActorId,
+        action: 'CLOSED_AUDIT_CYCLE',
+        entity: 'AUDIT_CYCLE',
+        entityId: bCycleId,
+        metadata: { missing: missingCount, damaged: damagedCount, verified: verifiedCount }
+      }
+    });
+  });
 
-    // 6. Notify assigned auditors and admins
-    const auditorsRes = await client.query(
-      `SELECT auditor_id FROM audit_assignment WHERE cycle_id = $1`,
-      [cycleId]
-    );
-    const auditorIds = auditorsRes.rows.map(r => r.auditor_id);
-    
-    // Add admin actor ID
-    const adminsRes = await client.query(`SELECT id FROM employee WHERE role = 'ADMIN' AND status = true`);
-    const adminIds = adminsRes.rows.map(r => r.id);
-    const allRecipientIds = Array.from(new Set([...auditorIds, ...adminIds]));
+  // Fetch auditors to notify them
+  const assignments = await prisma.auditAssignment.findMany({
+    where: { cycleId: bCycleId },
+    select: { auditorId: true }
+  });
+  const auditorIds = assignments.map(a => a.auditorId);
 
-    const msg = `Audit cycle "${cycle.name}" has been closed. Summary - Verified: ${verified}, Missing: ${missing}, Damaged: ${damaged}.`;
-    await notificationService.sendToMany(allRecipientIds, 'AUDIT_DISCREPANCY', msg, cycleId, 'AUDIT');
+  const msg = `Audit cycle "${cycle.name}" has been closed by Admin. Summary: Missing: ${missingCount}, Damaged: ${damagedCount}, Verified: ${verifiedCount}.`;
+  await notificationService.sendToMany(auditorIds, 'AUDIT_DISCREPANCY', msg, bCycleId, 'AUDIT');
 
-    // 7. Log ActivityLog
-    await client.query(
-      `
-      INSERT INTO activity_log (actor_id, action, entity, entity_id, metadata)
-      VALUES ($1, 'CLOSED_AUDIT', 'AUDIT_CYCLE', $2, $3)
-      `,
-      [
-        actor.id,
-        cycleId,
-        JSON.stringify({ cycleId, missing, damaged, verified })
-      ]
-    );
-
-    await client.query('COMMIT');
-
-    // 8. Return discrepancy summary
-    return { missing, damaged, verified };
-
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  return { missing: missingCount, damaged: damagedCount, verified: verifiedCount };
 }
 
 module.exports = { closeCycle };
