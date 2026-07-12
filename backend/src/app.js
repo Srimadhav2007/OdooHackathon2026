@@ -4,6 +4,10 @@
  */
 
 require('dotenv').config();
+
+// Polyfill BigInt serialization to prevent JSON.stringify crashes
+BigInt.prototype.toJSON = function() { return Number(this); };
+
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
