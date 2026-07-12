@@ -36,9 +36,10 @@ async function generateNextTag() {
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const {
-      tag, status, categoryId, location, isBookable, search,
+      tag, status, categoryId, location, isBookable, search, departmentId,
       page = 1, limit = 20,
     } = req.query;
+
 
     const where = {
       ...(tag && { tag: { contains: tag, mode: 'insensitive' } }),

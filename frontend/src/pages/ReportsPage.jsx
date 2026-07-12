@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import api from '../utils/api';
 import { Download, TrendingUp, AlertTriangle, ArrowUpRight, BarChart3, Activity, Clock, CheckCircle } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -17,20 +18,51 @@ export default function ReportsPage() {
     setTimeout(() => setToastMessage(''), 3000);
   };
 
-  // Dynamic Data based on Time Range
-  const dataSets = {
-    'This Week': { util: '81.5%', trend: [50, 60, 55, 70, 65, 80, 81], idle: 12, repair: '1.2' },
-    'This Month': { util: '84.2%', trend: [65, 72, 68, 85, 78, 92, 88], idle: 42, repair: '1.4' },
-    'This Quarter': { util: '88.1%', trend: [70, 75, 80, 82, 85, 88, 90], idle: 28, repair: '1.8' },
+  const [stats, setStats] = useState({
+    utilization: 0,
+    idleAssets: 0,
+    avgRepairDays: 0,
+    maintenanceForecast: [],
+    departmentStats: []
+  });
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = async () => {
+    try {
+      const [kpisRes, maintRes, deptRes] = await Promise.all([
+        api.get('/reports/kpis'),
+        api.get('/reports/maintenance'),
+        api.get('/reports/allocations')
+      ]);
+      
+      const { assetsAvailable, assetsAllocated } = kpisRes.data || {};
+      const total = (assetsAvailable || 0) + (assetsAllocated || 0);
+      const util = total > 0 ? ((assetsAllocated / total) * 100).toFixed(1) : 0;
+      
+      const maintData = maintRes.data || [];
+      const totalHours = maintData.reduce((acc, curr) => acc + (curr.avgResolutionHours || 0), 0);
+      const avgDays = maintData.length > 0 ? (totalHours / maintData.length / 24).toFixed(1) : 0;
+
+      setStats({
+        utilization: util,
+        idleAssets: assetsAvailable || 0,
+        avgRepairDays: avgDays,
+        maintenanceForecast: maintData,
+        departmentStats: deptRes.data || []
+      });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const currentData = dataSets[timeRange] || dataSets['This Month'];
+  useEffect(() => {
+    fetchData();
+  }, [timeRange]);
 
-  const departmentStats = [
-    { name: 'Engineering', count: 145, percentage: 45, color: 'bg-violet-600' },
-    { name: 'Operations', count: 89, percentage: 28, color: 'bg-sky-500' },
-    { name: 'Finance', count: 45, percentage: 14, color: 'bg-emerald-500' },
-  ];
+  // Mock trend data for chart display purposes
+  const currentData = { trend: [65, 72, 68, 85, 78, 92, 88] };
 
   return (
     <div className="relative mx-auto max-w-7xl pb-12">
@@ -61,15 +93,37 @@ export default function ReportsPage() {
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-5">
           <div className="mb-2 flex items-center gap-3 text-slate-500"><Activity size={18} /><span className="text-sm font-medium">Total Utilization</span></div>
-          <p className="text-3xl font-bold text-slate-900">{currentData.util}</p>
+          <p className="text-3xl font-bold text-slate-900">{loading ? '-' : `${stats.utilization}%`}</p>
         </Card>
         <Card className="p-5">
           <div className="mb-2 flex items-center gap-3 text-slate-500"><TrendingUp size={18} /><span className="text-sm font-medium">Idle Assets</span></div>
-          <p className="text-3xl font-bold text-slate-900">{currentData.idle}</p>
+          <p className="text-3xl font-bold text-slate-900">{loading ? '-' : stats.idleAssets}</p>
         </Card>
         <Card className="p-5">
           <div className="mb-2 flex items-center gap-3 text-slate-500"><Clock size={18} /><span className="text-sm font-medium">Avg Repair Time</span></div>
-          <p className="text-3xl font-bold text-slate-900">{currentData.repair} <span className="text-lg text-slate-500">days</span></p>
+          <p className="text-3xl font-bold text-slate-900">{loading ? '-' : stats.avgRepairDays} <span className="text-lg text-slate-500">days</span></p>
+        </Card>
+        <Card className="p-6">
+          <h3 className="mb-6 text-base font-semibold text-slate-900">Allocation by Department</h3>
+          <div className="space-y-5">
+            {loading ? (
+              <div className="text-sm text-slate-500">Loading...</div>
+            ) : stats.departmentStats.length === 0 ? (
+              <div className="text-sm text-slate-500">No department data</div>
+            ) : (
+              stats.departmentStats.map((dept, idx) => {
+                const colors = ['bg-violet-600', 'bg-sky-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500'];
+                const color = colors[idx % colors.length];
+                const percentage = stats.utilization > 0 && dept.totalAssets > 0 ? ((dept.totalAssets / (stats.utilization / 100 * (stats.idleAssets + dept.totalAssets))) * 100).toFixed(0) : 0; // rough percentage
+                return (
+                  <div key={idx}>
+                    <div className="mb-1 flex justify-between text-sm"><span className="font-medium text-slate-900">{dept.departmentName}</span><span className="text-slate-500">{dept.totalAssets} items</span></div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100"><div className={`h-full ${color}`} style={{ width: `${Math.min(100, Math.max(10, (dept.totalAssets / 200) * 100))}%` }}></div></div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </Card>
       </div>
 
@@ -93,10 +147,20 @@ export default function ReportsPage() {
             <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => navigate('/maintenance')}>View Schedule <ArrowUpRight size={14} className="ml-1" /></Button>
           </div>
           <table className="w-full text-left text-sm text-slate-600">
-            <thead className="bg-slate-50/50 text-xs uppercase text-slate-500"><tr><th className="px-6 py-3 font-medium">Category</th><th className="px-6 py-3 font-medium text-right">Due for Maint.</th></tr></thead>
+            <thead className="bg-slate-50/50 text-xs uppercase text-slate-500"><tr><th className="px-6 py-3 font-medium">Category</th><th className="px-6 py-3 font-medium text-right">Maint. Tickets</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
-              <tr className="hover:bg-slate-50"><td className="px-6 py-4 font-medium text-slate-900">Laptops</td><td className="px-6 py-4 text-right text-amber-600 font-medium">12 items</td></tr>
-              <tr className="hover:bg-slate-50"><td className="px-6 py-4 font-medium text-slate-900">Vehicles</td><td className="px-6 py-4 text-right text-amber-600 font-medium">3 items</td></tr>
+              {loading ? (
+                <tr><td colSpan="2" className="px-6 py-4 text-center text-slate-500">Loading...</td></tr>
+              ) : stats.maintenanceForecast.length === 0 ? (
+                <tr><td colSpan="2" className="px-6 py-4 text-center text-slate-500">No maintenance data</td></tr>
+              ) : (
+                stats.maintenanceForecast.map((item, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50">
+                    <td className="px-6 py-4 font-medium text-slate-900">{item.category}</td>
+                    <td className="px-6 py-4 text-right text-amber-600 font-medium">{item.count} items</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </Card>

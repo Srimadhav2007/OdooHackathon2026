@@ -1,9 +1,6 @@
 import { motion } from "framer-motion";
-import {
-  ArrowUpRight,
-  CircleDollarSign,
-  TrendingUp,
-} from "lucide-react";
+import { CircleDollarSign, TrendingUp } from "lucide-react";
+
 
 const toneStyles = {
   violet: {
@@ -104,38 +101,6 @@ export default function StatCard({
           </span>
 
         </div>
-
-        <div className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1">
-
-          <ArrowUpRight
-            size={14}
-            className="text-emerald-600"
-          />
-
-          <span className="text-xs font-semibold text-emerald-700">
-            +8%
-          </span>
-
-        </div>
-
-      </div>
-
-      {/* Progress */}
-
-      <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
-
-        <motion.div
-          initial={{
-            width: 0,
-          }}
-          animate={{
-            width: "72%",
-          }}
-          transition={{
-            duration: 1,
-          }}
-          className={`h-full rounded-full ${style.bar}`}
-        />
 
       </div>
     </motion.div>

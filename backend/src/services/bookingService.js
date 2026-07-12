@@ -29,53 +29,6 @@ async function createBooking(data, actor) {
     throw Object.assign(new Error('End time must be after start time'), { status: 400 });
   }
 
-<<<<<<< HEAD
-  const bAssetId = BigInt(assetId);
-  const bActorId = BigInt(actor.id);
-
-  // 2. Fetch asset; verify isBookable = true
-  const asset = await prisma.asset.findUnique({ where: { id: bAssetId } });
-  if (!asset) {
-    throw Object.assign(new Error('Asset not found'), { status: 404 });
-  }
-  if (!asset.isBookable) {
-    throw Object.assign(new Error('Asset is not marked as bookable'), { status: 400 });
-  }
-
-  // 3. Check overlapping bookings:
-  // A.startTime < B.endTime AND A.endTime > B.startTime
-  const conflicts = await prisma.booking.findMany({
-    where: {
-      assetId: bAssetId,
-      status: { in: ['UPCOMING', 'ONGOING'] },
-      startTime: { lt: end },
-      endTime: { gt: start },
-    },
-    include: { user: { select: { name: true } } }
-  });
-
-  // 4. If conflicts exist, throw conflict error
-  if (conflicts.length > 0) {
-    const c = conflicts[0];
-    const fmt = (d) => d.toISOString().replace(/T/, ' ').replace(/\..+/, '');
-    throw Object.assign(
-      new Error(`Overlaps with existing booking for ${c.user?.name || 'user'} from ${fmt(c.startTime)} to ${fmt(c.endTime)}`),
-      { status: 409, conflict: c }
-    );
-  }
-
-  // 5. Create booking & log activity
-  const booking = await prisma.$transaction(async (tx) => {
-    const b = await tx.booking.create({
-      data: {
-        assetId: bAssetId,
-        userId: bActorId,
-        startTime: start,
-        endTime: end,
-        status: 'UPCOMING',
-        notes: notes || null,
-      },
-=======
   return await prisma.$transaction(async (tx) => {
     const asset = await tx.asset.findUnique({ where: { id: BigInt(assetId) } });
     
@@ -133,28 +86,10 @@ async function createBooking(data, actor) {
         refId: booking.id,
         refType: 'BOOKING'
       }
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
     });
 
     await tx.activityLog.create({
       data: {
-<<<<<<< HEAD
-        actorId: bActorId,
-        action: 'CREATED_BOOKING',
-        entity: 'BOOKING',
-        entityId: b.id,
-        metadata: { assetId: bAssetId.toString(), startTime, endTime },
-      },
-    });
-
-    return b;
-  });
-
-  // 6. Broadcast dashboard refresh
-  broadcastDashboardRefresh();
-
-  return booking;
-=======
         actorId: BigInt(actor.id),
         action: 'CREATED_BOOKING',
         entity: 'BOOKING',
@@ -166,55 +101,12 @@ async function createBooking(data, actor) {
     broadcastDashboardRefresh();
     return booking;
   });
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
 }
 
 /**
  * Cancel a booking.
  */
 async function cancelBooking(bookingId, actor) {
-<<<<<<< HEAD
-  const bBookingId = BigInt(bookingId);
-  const bActorId = BigInt(actor.id);
-
-  const booking = await prisma.booking.findUnique({
-    where: { id: bBookingId }
-  });
-
-  if (!booking) {
-    throw Object.assign(new Error('Booking not found'), { status: 404 });
-  }
-
-  // Verify ownership or manager role
-  const isOwner = booking.userId === bActorId;
-  const isManager = actor.role === 'ADMIN' || actor.role === 'ASSET_MANAGER';
-  if (!isOwner && !isManager) {
-    throw Object.assign(new Error('Access denied. You do not own this booking.'), { status: 403 });
-  }
-
-  const updatedBooking = await prisma.$transaction(async (tx) => {
-    const b = await tx.booking.update({
-      where: { id: bBookingId },
-      data: { status: 'CANCELLED' }
-    });
-
-    await tx.activityLog.create({
-      data: {
-        actorId: bActorId,
-        action: 'CANCELLED_BOOKING',
-        entity: 'BOOKING',
-        entityId: bBookingId,
-      },
-    });
-
-    return b;
-  });
-
-  // Broadcast dashboard refresh
-  broadcastDashboardRefresh();
-
-  return updatedBooking;
-=======
   return await prisma.$transaction(async (tx) => {
     const booking = await tx.booking.findUnique({
       where: { id: BigInt(bookingId) }
@@ -276,7 +168,6 @@ async function cancelBooking(bookingId, actor) {
     broadcastDashboardRefresh();
     return updatedBooking;
   });
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
 }
 
 module.exports = { createBooking, cancelBooking };

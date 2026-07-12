@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Search, Filter, Laptop, Settings, ArrowRightLeft, X, CheckCircle } from 'lucide-react';
+import api from '../utils/api';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Search, ArrowRightLeft, X, CheckCircle } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -37,23 +39,40 @@ export default function AssetDirectoryPage() {
   const [toastMessage, setToastMessage] = useState('');
 
   // Search & Filter State
+  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const [assets, setAssets] = useState([
-    { id: 1, tag: 'AF-0001', name: 'MacBook Pro 16"', category: 'Electronics', location: 'HQ - Floor 3', status: 'Allocated', holder: 'Alicia Dean' },
-    { id: 2, tag: 'AF-0002', name: 'Dell UltraSharp 27"', category: 'Electronics', location: 'HQ - Storage', status: 'Available', holder: '-' },
-    { id: 3, tag: 'AF-0003', name: 'Conference Projector', category: 'Electronics', location: 'Meeting Room B', status: 'Under Maintenance', holder: '-' },
-    { id: 4, tag: 'AF-0004', name: 'Ford Transit Van', category: 'Vehicles', location: 'Warehouse Parking', status: 'Reserved', holder: '-' },
-    { id: 5, tag: 'AF-0005', name: 'Ergonomic Chair', category: 'Furniture', location: 'HQ - Floor 2', status: 'Available', holder: '-' },
-  ]);
+  const [assets, setAssets] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchAssets = async () => {
+    try {
+      const [assetsRes, catsRes] = await Promise.all([
+        api.get('/assets'),
+        api.get('/categories')
+      ]);
+      setAssets(assetsRes.data.assets || []);
+      setCategories(catsRes.data || []);
+    } catch (error) {
+      console.error('Error fetching assets:', error);
+      triggerToast('Failed to load assets');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAssets();
+  }, []);
 
   // Derived State: The filtered list
   const filteredAssets = assets.filter((asset) => {
-    const matchesSearch = asset.tag.toLowerCase().includes(searchQuery.toLowerCase()) || asset.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = categoryFilter === 'all' || asset.category.toLowerCase() === categoryFilter.toLowerCase();
-    const matchesStatus = statusFilter === 'all' || asset.status.toLowerCase() === statusFilter.toLowerCase();
+    const matchesSearch = asset.tag?.toLowerCase().includes(searchQuery.toLowerCase()) || asset.name?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = categoryFilter === 'all' || asset.category?.name?.toLowerCase() === categoryFilter.toLowerCase();
+    const matchesStatus = statusFilter === 'all' || asset.status?.toLowerCase() === statusFilter.toLowerCase();
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
@@ -63,29 +82,32 @@ export default function AssetDirectoryPage() {
   };
 
   const getStatusBadge = (status) => {
-    switch (status) {
-      case 'Available': return <Badge tone="success">Available</Badge>;
-      case 'Allocated': return <Badge tone="violet">Allocated</Badge>;
-      case 'Reserved': return <Badge tone="sky">Reserved</Badge>;
-      case 'Under Maintenance': return <Badge tone="warning">Maintenance</Badge>;
+    switch (status?.toUpperCase()) {
+      case 'AVAILABLE': return <Badge tone="success">Available</Badge>;
+      case 'ALLOCATED': return <Badge tone="violet">Allocated</Badge>;
+      case 'RESERVED': return <Badge tone="sky">Reserved</Badge>;
+      case 'MAINTENANCE': return <Badge tone="warning">Maintenance</Badge>;
+      case 'RETIRED': return <Badge tone="neutral">Retired</Badge>;
       default: return <Badge tone="neutral">{status}</Badge>;
     }
   };
 
-  const handleRegisterSubmit = (e) => {
+  const handleRegisterSubmit = async (e) => {
     e.preventDefault();
-    const newAsset = {
-      id: Date.now(),
-      tag: `AF-000${assets.length + 1}`,
-      name: e.target.assetName.value,
-      category: e.target.category.value,
-      location: e.target.location.value,
-      status: 'Available',
-      holder: '-',
-    };
-    setAssets([newAsset, ...assets]);
-    setIsRegisterModalOpen(false);
-    triggerToast(`Successfully registered ${newAsset.tag}`);
+    try {
+      await api.post('/assets', {
+        name: e.target.assetName.value,
+        categoryId: e.target.category.value,
+        condition: e.target.condition.value,
+        location: e.target.location.value,
+      });
+      setIsRegisterModalOpen(false);
+      triggerToast(`Asset registered successfully`);
+      fetchAssets();
+    } catch (err) {
+      console.error(err);
+      triggerToast('Failed to register asset');
+    }
   };
 
   return (
@@ -126,15 +148,16 @@ export default function AssetDirectoryPage() {
             <div className="flex items-center gap-3">
               <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
                 <option value="all">All Categories</option>
-                <option value="electronics">Electronics</option>
-                <option value="vehicles">Vehicles</option>
-                <option value="furniture">Furniture</option>
+                {categories.map(c => (
+                  <option key={c.id} value={c.name.toLowerCase()}>{c.name}</option>
+                ))}
               </select>
               <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
                 <option value="all">All Statuses</option>
                 <option value="available">Available</option>
                 <option value="allocated">Allocated</option>
-                <option value="under maintenance">Under Maintenance</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="retired">Retired</option>
               </select>
             </div>
           </div>
@@ -152,33 +175,37 @@ export default function AssetDirectoryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredAssets.length === 0 ? (
+                {loading ? (
+                  <tr><td colSpan="6" className="py-8 text-center text-slate-500">Loading...</td></tr>
+                ) : filteredAssets.length === 0 ? (
                   <tr><td colSpan="6" className="py-8 text-center text-slate-500">No assets match your search.</td></tr>
                 ) : (
-                  filteredAssets.map((asset) => (
-                    <tr key={asset.id} className="transition-colors hover:bg-slate-50">
-                      <td className="px-6 py-4">
-                        <div className="font-semibold text-slate-900">{asset.tag}</div>
-                        <div className="text-xs text-slate-500">{asset.name}</div>
-                      </td>
-                      <td className="px-6 py-4">{asset.category}</td>
-                      <td className="px-6 py-4">{asset.location}</td>
-                      <td className="px-6 py-4">{getStatusBadge(asset.status)}</td>
-                      <td className="px-6 py-4">{asset.holder}</td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex justify-end gap-2">
-                          {asset.status === 'Available' && (
-                            <Button variant="secondary" onClick={() => triggerToast(`Navigating to allocation for ${asset.tag}...`)} className="px-2 py-1 text-xs shadow-none">
-                              <ArrowRightLeft size={14} />
-                            </Button>
-                          )}
-                          <Button variant="ghost" onClick={() => triggerToast(`Opening settings for ${asset.tag}...`)} className="px-2 py-1 text-xs">
-                            <Settings size={14} />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  filteredAssets.map((asset) => {
+                    const holder = asset.allocations?.length > 0 
+                      ? (asset.allocations[0].employee?.name || asset.allocations[0].department?.name || '-')
+                      : '-';
+                    return (
+                      <tr key={asset.id} className="transition-colors hover:bg-slate-50">
+                        <td className="px-6 py-4">
+                          <div className="font-semibold text-slate-900">{asset.tag}</div>
+                          <div className="text-xs text-slate-500">{asset.name}</div>
+                        </td>
+                        <td className="px-6 py-4">{asset.category?.name || '-'}</td>
+                        <td className="px-6 py-4">{asset.location || '-'}</td>
+                        <td className="px-6 py-4">{getStatusBadge(asset.status)}</td>
+                        <td className="px-6 py-4">{holder}</td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex justify-end gap-2">
+                            {asset.status === 'AVAILABLE' && (
+                              <Button variant="secondary" onClick={() => navigate('/allocations')} className="px-2 py-1 text-xs shadow-none" title="Allocate this asset">
+                                <ArrowRightLeft size={14} />
+                              </Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -195,16 +222,20 @@ export default function AssetDirectoryPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Category</label>
-              <select name="category" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
-                <option value="Electronics">Electronics</option>
-                <option value="Vehicles">Vehicles</option>
-                <option value="Furniture">Furniture</option>
+              <select name="category" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
+                <option value="">Select Category</option>
+                {categories.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
               </select>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Condition</label>
               <select name="condition" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
-                <option value="New">New</option><option value="Good">Good</option>
+                <option value="NEW">New</option>
+                <option value="GOOD">Good</option>
+                <option value="FAIR">Fair</option>
+                <option value="POOR">Poor</option>
               </select>
             </div>
           </div>

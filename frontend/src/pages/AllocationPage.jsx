@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import api from '../utils/api';
 import { ArrowRightLeft, AlertTriangle, Search, Plus, CheckCircle, X, Clock } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -36,46 +37,81 @@ export default function AllocationPage() {
   const [selectedAssetId, setSelectedAssetId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const availableAssets = [
-    { id: '1', tag: 'AF-0002', name: 'Dell UltraSharp 27"', status: 'Available', currentHolder: null },
-    { id: '2', tag: 'AF-0005', name: 'Ergonomic Chair', status: 'Available', currentHolder: null },
-    { id: '3', tag: 'AF-0001', name: 'MacBook Pro 16"', status: 'Allocated', currentHolder: 'Alicia Dean' },
-  ];
+  const [allocations, setAllocations] = useState([]);
+  const [transfers, setTransfers] = useState([]);
+  const [availableAssets, setAvailableAssets] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [allocations, setAllocations] = useState([
-    { id: 101, assetTag: 'AF-0001', assetName: 'MacBook Pro 16"', assignedTo: 'Alicia Dean', dept: 'HQ', dateAssigned: '2026-06-01', expectedReturn: '2027-06-01', status: 'Active' },
-    { id: 102, assetTag: 'AF-0114', assetName: 'ThinkPad T14', assignedTo: 'Priya Sharma', dept: 'Engineering', dateAssigned: '2026-05-15', expectedReturn: '2026-07-10', status: 'Overdue' },
-  ]);
-
-  const [transfers, setTransfers] = useState([
-    { id: 201, assetTag: 'AF-0088', assetName: 'iPad Pro', fromUser: 'David Cho', toUser: 'Marcus Cole', requestedOn: '2026-07-11', status: 'Pending Approval' },
-  ]);
-
-  // Derived filtered arrays
-  const filteredAllocations = allocations.filter(a => a.assetTag.toLowerCase().includes(searchQuery.toLowerCase()) || a.assignedTo.toLowerCase().includes(searchQuery.toLowerCase()));
-  const filteredTransfers = transfers.filter(t => t.assetTag.toLowerCase().includes(searchQuery.toLowerCase()) || t.fromUser.toLowerCase().includes(searchQuery.toLowerCase()) || t.toUser.toLowerCase().includes(searchQuery.toLowerCase()));
-
-  const selectedAsset = availableAssets.find(a => a.id === selectedAssetId);
-  const isConflict = selectedAsset?.status === 'Allocated';
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (isConflict) {
-      setTransfers([{ id: Date.now(), assetTag: selectedAsset.tag, assetName: selectedAsset.name, fromUser: selectedAsset.currentHolder, toUser: 'Marcus Cole', requestedOn: 'Just now', status: 'Pending Approval' }, ...transfers]);
-    } else {
-      setAllocations([{ id: Date.now(), assetTag: selectedAsset.tag, assetName: selectedAsset.name, assignedTo: 'Marcus Cole', dept: 'Operations', dateAssigned: 'Today', expectedReturn: '-', status: 'Active' }, ...allocations]);
+  const fetchAllData = async () => {
+    try {
+      const [allocsRes, transRes, assetsRes, empRes] = await Promise.all([
+        api.get('/allocations'),
+        api.get('/allocations/transfers/pending'),
+        api.get('/assets'),
+        api.get('/employees')
+      ]);
+      setAllocations(allocsRes.data || []);
+      setTransfers(transRes.data || []);
+      setAvailableAssets(assetsRes.data.assets || []);
+      setEmployees(empRes.data || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
     }
-    setIsModalOpen(false);
-    setSelectedAssetId('');
   };
 
-  const processReturn = (id) => setAllocations(allocations.filter(a => a.id !== id));
-  const resolveTransfer = (id, action) => {
-    if (action === 'Approve') {
-      const t = transfers.find(x => x.id === id);
-      setAllocations([{ id: Date.now(), assetTag: t.assetTag, assetName: t.assetName, assignedTo: t.toUser, dept: 'Transferred', dateAssigned: 'Today', expectedReturn: '-', status: 'Active' }, ...allocations]);
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  // Derived filtered arrays
+  const filteredAllocations = allocations.filter(a => a.asset?.tag?.toLowerCase().includes(searchQuery.toLowerCase()) || a.employee?.name?.toLowerCase().includes(searchQuery.toLowerCase()) || a.department?.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredTransfers = transfers.filter(t => t.allocation?.asset?.tag?.toLowerCase().includes(searchQuery.toLowerCase()) || t.requestedBy?.name?.toLowerCase().includes(searchQuery.toLowerCase()) || t.targetEmployee?.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+
+  const selectedAsset = availableAssets.find(a => a.id === selectedAssetId);
+  const isConflict = selectedAsset?.status === 'ALLOCATED';
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const targetEmployeeId = e.target.employeeId.value;
+    
+    try {
+      if (isConflict) {
+        // Assume there is an active allocation we are requesting to transfer from
+        const activeAlloc = allocations.find(a => a.assetId === selectedAsset.id && a.status === 'ACTIVE');
+        if (activeAlloc) {
+          await api.post(`/allocations/${activeAlloc.id}/transfer-request`, { targetEmployeeId });
+        }
+      } else {
+        await api.post('/allocations', { assetId: selectedAsset.id, employeeId: targetEmployeeId });
+      }
+      setIsModalOpen(false);
+      setSelectedAssetId('');
+      fetchAllData();
+    } catch (error) {
+      console.error(error);
+      alert('Failed to allocate asset');
     }
-    setTransfers(transfers.filter(t => t.id !== id));
+  };
+
+  const processReturn = async (id) => {
+    try {
+      await api.put(`/allocations/${id}/return`, { conditionNotes: 'Returned' });
+      fetchAllData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const resolveTransfer = async (id, action) => {
+    try {
+      await api.put(`/allocations/transfers/${id}/${action.toLowerCase()}`);
+      fetchAllData();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   return (
@@ -146,18 +182,29 @@ export default function AllocationPage() {
               {activeTab === 'active' ? (
                 <table className="w-full text-left text-sm text-slate-600">
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                    <tr><th className="px-6 py-3 font-medium">Asset</th><th className="px-6 py-3 font-medium">Assigned To</th><th className="px-6 py-3 font-medium">Assigned Date</th><th className="px-6 py-3 font-medium">Expected Return</th><th className="px-6 py-3 font-medium">Status</th><th className="px-6 py-3 text-right font-medium">Actions</th></tr>
+                    <tr><th className="px-6 py-3 font-medium">Asset</th><th className="px-6 py-3 font-medium">Assigned To</th><th className="px-6 py-3 font-medium">Department</th><th className="px-6 py-3 font-medium">Assigned Date</th><th className="px-6 py-3 font-medium">Expected Return</th><th className="px-6 py-3 font-medium">Status</th><th className="px-6 py-3 text-right font-medium">Actions</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {filteredAllocations.map((row) => (
                       <tr key={row.id} className="transition-colors hover:bg-slate-50">
-                        <td className="px-6 py-4"><div className="font-medium text-slate-900">{row.assetTag}</div><div className="text-xs text-slate-500">{row.assetName}</div></td>
-                        <td className="px-6 py-4"><div className="font-medium text-slate-900">{row.assignedTo}</div><div className="text-xs text-slate-500">{row.dept}</div></td>
-                        <td className="px-6 py-4">{row.dateAssigned}</td>
-                        <td className={`px-6 py-4 font-medium ${row.status === 'Overdue' ? 'text-red-600' : 'text-slate-600'}`}>{row.expectedReturn}</td>
-                        <td className="px-6 py-4"><Badge tone={row.status === 'Overdue' ? 'error' : 'success'}>{row.status}</Badge></td>
+                        <td className="px-6 py-4">
+                          <div className="font-semibold text-slate-900">{row.asset?.tag}</div>
+                          <div className="text-xs text-slate-500">{row.asset?.name}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="font-medium text-slate-800">{row.employee?.name || row.department?.name}</div>
+                          <div className="text-xs text-slate-500">{row.employee?.email || '-'}</div>
+                        </td>
+                        <td className="px-6 py-4">{row.department?.name || row.employee?.department?.name || '-'}</td>
+                        <td className="px-6 py-4">{new Date(row.createdAt).toLocaleDateString()}</td>
+                        <td className="px-6 py-4 text-slate-500">{row.expectedReturn ? new Date(row.expectedReturn).toLocaleDateString() : '-'}</td>
+                        <td className="px-6 py-4">
+                          <Badge tone={row.status === 'ACTIVE' ? 'success' : row.status === 'OVERDUE' ? 'warning' : 'neutral'}>{row.status}</Badge>
+                        </td>
                         <td className="px-6 py-4 text-right">
-                          <Button variant="ghost" onClick={() => processReturn(row.id)} className="px-2 py-1 text-xs">Process Return</Button>
+                          {row.status === 'ACTIVE' && (
+                            <Button variant="ghost" onClick={() => processReturn(row.id)} className="px-2 py-1 text-xs">Process Return</Button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -166,15 +213,23 @@ export default function AllocationPage() {
               ) : (
                 <table className="w-full text-left text-sm text-slate-600">
                   <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                    <tr><th className="px-6 py-3 font-medium">Asset</th><th className="px-6 py-3 font-medium">Current Holder</th><th className="px-6 py-3 font-medium">Requested By</th><th className="px-6 py-3 font-medium">Date Requested</th><th className="px-6 py-3 font-medium">Status</th><th className="px-6 py-3 text-right font-medium">Actions</th></tr>
+                    <tr><th className="px-6 py-3 font-medium">Asset</th><th className="px-6 py-3 font-medium">Transfer Details</th><th className="px-6 py-3 font-medium">Date Requested</th><th className="px-6 py-3 font-medium">Status</th><th className="px-6 py-3 text-right font-medium">Actions</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {filteredTransfers.map((row) => (
                       <tr key={row.id} className="transition-colors hover:bg-slate-50">
-                        <td className="px-6 py-4"><div className="font-medium text-slate-900">{row.assetTag}</div><div className="text-xs text-slate-500">{row.assetName}</div></td>
-                        <td className="px-6 py-4 text-slate-900">{row.fromUser}</td>
-                        <td className="px-6 py-4 font-medium text-violet-700">{row.toUser}</td>
-                        <td className="px-6 py-4">{row.requestedOn}</td>
+                        <td className="px-6 py-4">
+                          <div className="font-semibold text-slate-900">{row.allocation?.asset?.tag}</div>
+                          <div className="text-xs text-slate-500">{row.allocation?.asset?.name}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-slate-600">{row.requestedBy?.name}</span>
+                            <ArrowRightLeft size={14} className="text-slate-400" />
+                            <span className="font-medium text-slate-900">{row.targetEmployee?.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-slate-500">{new Date(row.createdAt).toLocaleDateString()}</td>
                         <td className="px-6 py-4"><Badge tone="warning">{row.status}</Badge></td>
                         <td className="px-6 py-4 text-right">
                           <div className="flex justify-end gap-2">
@@ -198,7 +253,14 @@ export default function AllocationPage() {
             <label className="mb-1 block text-sm font-medium text-slate-700">Select Asset</label>
             <select required value={selectedAssetId} onChange={(e) => setSelectedAssetId(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
               <option value="" disabled>Choose an asset...</option>
-              {availableAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.tag} - {asset.name} {asset.status === 'Allocated' ? '(Already Taken)' : ''}</option>)}
+              {availableAssets.map(asset => <option key={asset.id} value={asset.id}>{asset.tag} - {asset.name} {asset.status === 'ALLOCATED' ? '(Already Taken)' : ''}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Select Employee</label>
+            <select name="employeeId" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
+              <option value="" disabled>Choose an employee...</option>
+              {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
             </select>
           </div>
           <AnimatePresence>

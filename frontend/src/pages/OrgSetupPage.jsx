@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import api from '../utils/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Building2, Tags, Users, Plus, Search, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -38,25 +39,32 @@ export default function OrgSetupPage({ defaultTab = 'departments' }) {
   const [modalState, setModalState] = useState({ isOpen: false, type: null, data: null });
   const navigate = useNavigate();
 
-  const [departments, setDepartments] = useState([
-    { id: 1, name: 'Finance', head: 'Sarah Jenkins', parent: 'HQ', status: 'Active' },
-    { id: 2, name: 'Engineering', head: 'Marcus Cole', parent: 'HQ', status: 'Active' },
-    { id: 3, name: 'Logistics', head: 'Unassigned', parent: 'Operations', status: 'Active' },
-  ]);
+  const [departments, setDepartments] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [categories, setCategories] = useState([
-    { id: 1, name: 'Electronics', attributes: 'Warranty, MAC Address', status: 'Active' },
-    { id: 2, name: 'Vehicles', attributes: 'License Plate, Mileage', status: 'Active' },
-    { id: 3, name: 'Furniture', attributes: 'Condition, Location', status: 'Active' },
-  ]);
+  const fetchData = async () => {
+    try {
+      const [deptRes, catRes, empRes] = await Promise.all([
+        api.get('/departments'),
+        api.get('/categories'),
+        api.get('/employees')
+      ]);
+      setDepartments(deptRes.data || []);
+      setCategories(catRes.data || []);
+      setEmployees(empRes.data || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const [employees, setEmployees] = useState([
-    { id: 1, name: 'Alicia Dean', email: 'admin@assetflow.com', dept: 'HQ', role: 'Admin' },
-    { id: 2, name: 'Priya Sharma', email: 'emp@assetflow.com', dept: 'Engineering', role: 'Employee' },
-    { id: 3, name: 'David Cho', email: 'manager@assetflow.com', dept: 'Operations', role: 'Asset Manager' },
-  ]);
-
-  useEffect(() => setActiveTab(defaultTab), [defaultTab]);
+  useEffect(() => {
+    fetchData();
+    setActiveTab(defaultTab);
+  }, [defaultTab]);
 
   const handleTabChange = (tabId) => {
     setActiveTab(tabId);
@@ -73,21 +81,40 @@ export default function OrgSetupPage({ defaultTab = 'departments' }) {
   ];
 
   // FIX: Properly handle form submissions for edits
-  const handleFormSubmit = (e) => {
+  const handleFormSubmit = async (e) => {
     e.preventDefault();
-    if (modalState.type === 'editDepartment') {
-      const newName = e.target.deptName.value;
-      const newParent = e.target.parentDept.value;
-      setDepartments(prev => prev.map(d => d.id === modalState.data.id ? { ...d, name: newName, parent: newParent } : d));
-    } else if (modalState.type === 'editCategory') {
-      const newName = e.target.catName.value;
-      const newAttrs = e.target.attributes.value;
-      setCategories(prev => prev.map(c => c.id === modalState.data.id ? { ...c, name: newName, attributes: newAttrs } : c));
-    } else if (modalState.type === 'manageRole') {
-      const newRole = e.target.roleSelect.value;
-      setEmployees(prev => prev.map(emp => emp.id === modalState.data.id ? { ...emp, role: newRole } : emp));
+    try {
+      if (modalState.type === 'editDepartment') {
+        await api.put(`/departments/${modalState.data.id}`, {
+          name: e.target.deptName.value,
+          parentId: e.target.parentDept.value || null
+        });
+      } else if (modalState.type === 'adddepartments') {
+        await api.post('/departments', {
+          name: e.target.deptName.value,
+          parentId: e.target.parentDept.value || null
+        });
+      } else if (modalState.type === 'editCategory') {
+        await api.put(`/categories/${modalState.data.id}`, {
+          name: e.target.catName.value,
+          attributes: e.target.attributes.value
+        });
+      } else if (modalState.type === 'addcategories') {
+        await api.post('/categories', {
+          name: e.target.catName.value,
+          attributes: e.target.attributes.value
+        });
+      } else if (modalState.type === 'manageRole') {
+        await api.put(`/employees/${modalState.data.id}/role`, {
+          role: e.target.roleSelect.value
+        });
+      }
+      fetchData();
+      closeModal();
+    } catch (err) {
+      console.error(err);
+      alert('Operation failed');
     }
-    closeModal();
   };
 
   return (
@@ -127,9 +154,15 @@ export default function OrgSetupPage({ defaultTab = 'departments' }) {
 
         <div className="mt-6">
           <Card className="overflow-hidden p-0">
-            {activeTab === 'departments' && <DepartmentsTable data={departments} onEdit={(data) => openModal('editDepartment', data)} />}
-            {activeTab === 'employees' && <EmployeesTable data={employees} onManageRole={(data) => openModal('manageRole', data)} />}
-            {activeTab === 'categories' && <CategoriesTable data={categories} onEdit={(data) => openModal('editCategory', data)} />}
+            {loading ? (
+              <div className="p-8 text-center text-slate-500">Loading...</div>
+            ) : (
+              <>
+                {activeTab === 'departments' && <DepartmentsTable data={departments} onEdit={(data) => openModal('editDepartment', data)} />}
+                {activeTab === 'employees' && <EmployeesTable data={employees} onManageRole={(data) => openModal('manageRole', data)} />}
+                {activeTab === 'categories' && <CategoriesTable data={categories} onEdit={(data) => openModal('editCategory', data)} />}
+              </>
+            )}
           </Card>
         </div>
       </div>
@@ -154,10 +187,11 @@ export default function OrgSetupPage({ defaultTab = 'departments' }) {
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Parent Department (Optional)</label>
-                <select name="parentDept" defaultValue={modalState.data?.parent?.toLowerCase() || ''} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
+                <select name="parentDept" defaultValue={modalState.data?.parentId || ''} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
                   <option value="">None (Top Level)</option>
-                  <option value="hq">HQ</option>
-                  <option value="operations">Operations</option>
+                  {departments.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
                 </select>
               </div>
             </>
@@ -186,10 +220,10 @@ export default function OrgSetupPage({ defaultTab = 'departments' }) {
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Assign New Role</label>
                 <select name="roleSelect" defaultValue={modalState.data?.role} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
-                  <option value="Employee">Employee (Standard Access)</option>
-                  <option value="Department Head">Department Head</option>
-                  <option value="Asset Manager">Asset Manager</option>
-                  <option value="Admin">System Admin</option>
+                  <option value="EMPLOYEE">Employee (Standard Access)</option>
+                  <option value="DEPT_HEAD">Department Head</option>
+                  <option value="ASSET_MANAGER">Asset Manager</option>
+                  <option value="ADMIN">System Admin</option>
                 </select>
               </div>
             </>
@@ -220,8 +254,8 @@ function DepartmentsTable({ data, onEdit }) {
         {data.map((row) => (
           <tr key={row.id} className="transition-colors hover:bg-slate-50">
             <td className="px-6 py-4 font-medium text-slate-900">{row.name}</td>
-            <td className="px-6 py-4">{row.head}</td>
-            <td className="px-6 py-4"><Badge tone="success">{row.status}</Badge></td>
+            <td className="px-6 py-4">{row.head?.name || 'Unassigned'}</td>
+            <td className="px-6 py-4"><Badge tone={row.status ? 'success' : 'neutral'}>{row.status ? 'Active' : 'Inactive'}</Badge></td>
             <td className="px-6 py-4 text-right">
               <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => onEdit(row)}>Edit</Button>
             </td>

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import api from '../utils/api';
 import { Calendar, Clock, Plus, Search, X, CheckCircle, MapPin, AlertTriangle } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -32,22 +33,33 @@ export default function BookingPage() {
   const [bookingDate, setBookingDate] = useState(today);
   const [bookingTime, setBookingTime] = useState({ start: '', end: '' });
 
-  const resources = [
-    { id: 'res-1', name: 'Conference Room A', type: 'Room', capacity: '12 People' },
-    { id: 'res-2', name: 'Conference Room B', type: 'Room', capacity: '6 People' },
-    { id: 'res-3', name: 'Ford Transit Van', type: 'Vehicle', capacity: 'Cargo' },
-  ];
+  const [resources, setResources] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const [bookings, setBookings] = useState([
-    { id: 1, resource: 'Conference Room A', requestedBy: 'Marcus Cole', date: today, startTime: '10:00', endTime: '11:30', status: 'Completed' },
-    { id: 2, resource: 'Ford Transit Van', requestedBy: 'Logistics Team', date: today, startTime: '13:00', endTime: '16:00', status: 'Ongoing' },
-    { id: 3, resource: 'Conference Room B', requestedBy: 'Alicia Dean', date: today, startTime: '15:00', endTime: '16:00', status: 'Upcoming' },
-  ]);
+  const fetchBookingsAndResources = async () => {
+    try {
+      const [bookRes, resRes] = await Promise.all([
+        api.get('/bookings'),
+        api.get('/assets?isBookable=true')
+      ]);
+      setBookings(bookRes.data || []);
+      setResources(resRes.data.assets || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBookingsAndResources();
+  }, []);
 
   // Dynamic filter for search bar
   const filteredBookings = bookings.filter(b => 
-    b.resource.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    b.requestedBy.toLowerCase().includes(searchQuery.toLowerCase())
+    b.asset?.name?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    b.user?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const format12Hour = (time24) => {
@@ -58,19 +70,42 @@ export default function BookingPage() {
   };
 
   const selectedResourceName = resources.find(r => r.id === selectedResource)?.name;
-  const isConflict = selectedResourceName && bookingTime.start && bookingTime.end && bookings.some(b => 
-    b.resource === selectedResourceName && b.date === bookingDate && bookingTime.start < b.endTime && bookingTime.end > b.startTime && b.status !== 'Cancelled'
-  );
+  const isConflict = selectedResourceName && bookingTime.start && bookingTime.end && bookings.some(b => {
+    const bStart = new Date(b.startTime).toTimeString().substring(0,5);
+    const bEnd = new Date(b.endTime).toTimeString().substring(0,5);
+    const bDate = new Date(b.startTime).toISOString().split('T')[0];
+    return b.asset?.name === selectedResourceName && bDate === bookingDate && bookingTime.start < bEnd && bookingTime.end > bStart && b.status !== 'CANCELLED';
+  });
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (isConflict) return; 
-    setBookings([{ id: Date.now(), resource: selectedResourceName, requestedBy: 'You', date: bookingDate, startTime: bookingTime.start, endTime: bookingTime.end, status: 'Upcoming' }, ...bookings]);
-    setIsModalOpen(false);
+
+    try {
+      const startObj = new Date(`${bookingDate}T${bookingTime.start}:00Z`);
+      const endObj = new Date(`${bookingDate}T${bookingTime.end}:00Z`);
+      
+      await api.post('/bookings', {
+        assetId: selectedResource,
+        startTime: startObj.toISOString(),
+        endTime: endObj.toISOString(),
+        purpose: 'Booking via UI'
+      });
+      setIsModalOpen(false);
+      fetchBookingsAndResources();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to create booking');
+    }
   };
 
-  const cancelBooking = (id) => {
-    setBookings(bookings.map(b => b.id === id ? { ...b, status: 'Cancelled' } : b));
+  const cancelBooking = async (id) => {
+    try {
+      await api.put(`/bookings/${id}/cancel`);
+      fetchBookingsAndResources();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   return (
@@ -87,22 +122,28 @@ export default function BookingPage() {
               </div>
             </div>
             <div className="divide-y divide-slate-100">
-              {filteredBookings.map((booking) => (
-                <div key={booking.id} className="flex items-center justify-between p-4 transition-colors hover:bg-slate-50">
-                  <div className="flex items-start gap-4">
-                    <div className="mt-1 rounded-full bg-slate-100 p-2 text-slate-500"><Clock size={18} /></div>
-                    <div>
-                      <h4 className="font-medium text-slate-900">{booking.resource}</h4>
-                      <p className="text-sm text-slate-500">{booking.date} • {format12Hour(booking.startTime)} - {format12Hour(booking.endTime)}</p>
-                      <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><MapPin size={12} /> Requested by {booking.requestedBy}</div>
+              {loading ? (
+                <div className="p-4 text-center text-slate-500">Loading...</div>
+              ) : filteredBookings.map((booking) => {
+                const bStart = new Date(booking.startTime);
+                const bEnd = new Date(booking.endTime);
+                return (
+                  <div key={booking.id} className="flex items-center justify-between p-4 transition-colors hover:bg-slate-50">
+                    <div className="flex items-start gap-4">
+                      <div className="mt-1 rounded-full bg-slate-100 p-2 text-slate-500"><Clock size={18} /></div>
+                      <div>
+                        <h4 className="font-medium text-slate-900">{booking.asset?.name || 'Asset'}</h4>
+                        <p className="text-sm text-slate-500">{bStart.toISOString().split('T')[0]} • {format12Hour(bStart.toTimeString().substring(0,5))} - {format12Hour(bEnd.toTimeString().substring(0,5))}</p>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-slate-400"><MapPin size={12} /> Requested by {booking.user?.name}</div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <Badge tone={booking.status === 'UPCOMING' ? 'sky' : booking.status === 'ONGOING' ? 'violet' : booking.status === 'CANCELLED' ? 'neutral' : 'success'}>{booking.status}</Badge>
+                      {booking.status === 'UPCOMING' && <Button variant="ghost" onClick={() => cancelBooking(booking.id)} className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 hover:text-red-700">Cancel</Button>}
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <Badge tone={booking.status === 'Ongoing' ? 'violet' : booking.status === 'Upcoming' ? 'sky' : booking.status === 'Completed' ? 'success' : 'neutral'}>{booking.status}</Badge>
-                    {booking.status === 'Upcoming' && <Button variant="ghost" onClick={() => cancelBooking(booking.id)} className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 hover:text-red-700">Cancel</Button>}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
         </div>
@@ -123,13 +164,12 @@ export default function BookingPage() {
         </div>
       </div>
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Book a Resource">
-        {/* Same form as before */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Select Resource</label>
             <select required value={selectedResource} onChange={(e) => setSelectedResource(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
-              <option value="" disabled>Choose...</option>
-              {resources.map(res => <option key={res.id} value={res.id}>{res.name}</option>)}
+              <option value="" disabled>Select a room or vehicle</option>
+              {resources.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-4">

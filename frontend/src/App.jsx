@@ -11,7 +11,7 @@ import MaintenancePage from './pages/MaintenancePage';
 import AuditPage from './pages/AuditPage';
 import ReportsPage from './pages/ReportsPage';
 import ActivityPage from './pages/ActivityPage';
-import { useState } from 'react';
+import { useAuth } from './context/AuthContext';
 
 // Basic Auth Guard
 const RequireAuth = ({ children, isAuthenticated }) => {
@@ -24,19 +24,19 @@ const RequireAdmin = ({ children, userRole }) => {
 };
 
 export default function App() {
-  // ⚠️ DUMMY BYPASS: Hardcoded to true and 'Admin' so you can see the tabs!
-  // REMINDER: Change these back to `false` and `null` before your final submission.
-  const [isAuthenticated, setIsAuthenticated] = useState(true); 
-  const [userRole, setUserRole] = useState('Admin'); 
+  const { isAuthenticated, user, loading } = useAuth();
+  
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600"></div></div>;
+  }
+  
+  const userRole = user?.role === 'ADMIN' ? 'Admin' : user?.role === 'DEPT_HEAD' ? 'DeptHead' : 'Employee';
 
   return (
     <Routes>
       {/* Public Route */}
       <Route path="/login" element={
-        <AuthPage onLogin={() => {
-          setIsAuthenticated(true);
-          setUserRole('Admin'); // Just for testing the UI flow
-        }} />
+        !isAuthenticated ? <AuthPage /> : <Navigate to="/dashboard" replace />
       } />
 
       {/* Protected Routes (Requires Login) */}

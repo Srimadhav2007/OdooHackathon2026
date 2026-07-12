@@ -11,8 +11,6 @@ const auditService = require('../services/auditService');
 const notificationService = require('../services/notificationService');
 
 const prisma = new PrismaClient();
-<<<<<<< HEAD
-=======
 
 // Helper to map audit cycle row
 function mapAuditCycleRow(c) {
@@ -49,7 +47,6 @@ router.get('/', authenticate, requireDeptHead, async (req, res, next) => {
     next(err);
   }
 });
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
 
 // POST /api/audits
 router.post('/', authenticate, requireAdmin, async (req, res, next) => {
@@ -65,51 +62,6 @@ router.post('/', authenticate, requireAdmin, async (req, res, next) => {
       return res.status(400).json({ error: 'scopeType must be either DEPARTMENT or LOCATION' });
     }
 
-<<<<<<< HEAD
-    const cycle = await prisma.$transaction(async (tx) => {
-      const c = await tx.auditCycle.create({
-        data: {
-          name,
-          scopeType,
-          scopeValue,
-          startDate: new Date(startDate),
-          endDate: new Date(endDate),
-          status: 'OPEN'
-        }
-      });
-
-      await tx.activityLog.create({
-        data: {
-          actorId: bActorId,
-          action: 'CREATED_AUDIT_CYCLE',
-          entity: 'AUDIT_CYCLE',
-          entityId: c.id,
-          metadata: { name }
-        }
-      });
-
-      return c;
-    });
-
-    res.status(201).json(cycle);
-  } catch (err) {
-    next(err);
-  }
-});
-
-// GET /api/audits
-router.get('/', authenticate, requireDeptHead, async (req, res, next) => {
-  try {
-    const cycles = await prisma.auditCycle.findMany({
-      include: {
-        _count: {
-          select: { results: true, assignments: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
-    res.json(cycles);
-=======
     if (scopeType === 'DEPARTMENT') {
       const dept = await prisma.department.findUnique({ where: { id: BigInt(scopeValue) } });
       if (!dept) {
@@ -129,7 +81,6 @@ router.get('/', authenticate, requireDeptHead, async (req, res, next) => {
     });
 
     res.status(201).json(mapAuditCycleRow(cycle));
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -138,19 +89,6 @@ router.get('/', authenticate, requireDeptHead, async (req, res, next) => {
 // GET /api/audits/:id
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const bId = BigInt(req.params.id);
-    const cycle = await prisma.auditCycle.findUnique({
-      where: { id: bId },
-      include: {
-        assignments: { include: { auditor: { select: { id: true, name: true, email: true } } } },
-        results: { include: { asset: { select: { tag: true, name: true } }, auditor: { select: { name: true } } } }
-      }
-    });
-
-    if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
-    res.json(cycle);
-=======
     const id = BigInt(req.params.id);
 
     const cycle = await prisma.auditCycle.findUnique({
@@ -190,7 +128,6 @@ router.get('/:id', authenticate, async (req, res, next) => {
     mapped.summary = summary;
 
     res.json(mapped);
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -199,53 +136,13 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // POST /api/audits/:id/assign
 router.post('/:id/assign', authenticate, requireAdmin, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const bId = BigInt(req.params.id);
-    const { auditorIds } = req.body; // array of numbers/strings
-=======
     const id = BigInt(req.params.id);
     const { auditorIds } = req.body;
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
 
     if (!auditorIds || !Array.isArray(auditorIds)) {
       return res.status(400).json({ error: 'auditorIds must be an array' });
     }
 
-<<<<<<< HEAD
-    const cycle = await prisma.auditCycle.findUnique({ where: { id: bId } });
-    if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
-
-    const assignments = await prisma.$transaction(async (tx) => {
-      const list = [];
-      for (const audId of auditorIds) {
-        const bAudId = BigInt(audId);
-        
-        // Check if already assigned
-        const exist = await tx.auditAssignment.findFirst({
-          where: { cycleId: bId, auditorId: bAudId }
-        });
-
-        if (!exist) {
-          const ass = await tx.auditAssignment.create({
-            data: { cycleId: bId, auditorId: bAudId }
-          });
-          list.push(ass);
-
-          // Notify auditor
-          await notificationService.send(
-            bAudId,
-            'AUDIT_ASSIGNED',
-            `You have been assigned as auditor for cycle: ${cycle.name}`,
-            bId,
-            'AUDIT'
-          );
-        }
-      }
-      return list;
-    });
-
-    res.status(201).json(assignments);
-=======
     const cycle = await prisma.auditCycle.findUnique({ where: { id }, select: { name: true } });
     if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
 
@@ -276,7 +173,6 @@ router.post('/:id/assign', authenticate, requireAdmin, async (req, res, next) =>
     });
 
     res.status(201).json(createdAssignments);
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -285,21 +181,6 @@ router.post('/:id/assign', authenticate, requireAdmin, async (req, res, next) =>
 // GET /api/audits/:id/assets
 router.get('/:id/assets', authenticate, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const bId = BigInt(req.params.id);
-
-    const cycle = await prisma.auditCycle.findUnique({ where: { id: bId } });
-    if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
-
-    let scopeWhere = {};
-    if (cycle.scopeType === 'DEPARTMENT') {
-      const bDeptId = BigInt(cycle.scopeValue);
-      scopeWhere = {
-        OR: [
-          { allocations: { some: { departmentId: bDeptId, status: 'ACTIVE' } } },
-          { allocations: { some: { employee: { departmentId: bDeptId }, status: 'ACTIVE' } } }
-        ]
-=======
     const id = BigInt(req.params.id);
 
     const cycle = await prisma.auditCycle.findUnique({ where: { id } });
@@ -354,30 +235,10 @@ router.get('/:id/assets', authenticate, async (req, res, next) => {
           notes: match.notes,
           auditor: { id: match.auditorId, name: match.auditor.name }
         } : null
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
       };
-    } else if (cycle.scopeType === 'LOCATION') {
-      scopeWhere = {
-        location: { contains: cycle.scopeValue, mode: 'insensitive' }
-      };
-    }
-
-    const assets = await prisma.asset.findMany({
-      where: scopeWhere,
-      include: {
-        auditResults: {
-          where: { cycleId: bId },
-          include: { auditor: { select: { name: true } } },
-          take: 1
-        }
-      }
     });
 
-<<<<<<< HEAD
-    res.json(assets);
-=======
     res.json(assetsWithResults);
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -386,69 +247,14 @@ router.get('/:id/assets', authenticate, async (req, res, next) => {
 // PUT /api/audits/:id/results
 router.put('/:id/results', authenticate, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const bId = BigInt(req.params.id);
-    const bActorId = BigInt(req.user.id);
-    const { results } = req.body; // array of { assetId, verdict, notes }
-=======
     const id = BigInt(req.params.id);
     const { results } = req.body;
     const actor = req.user;
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
 
     if (!results || !Array.isArray(results)) {
       return res.status(400).json({ error: 'results must be an array' });
     }
 
-<<<<<<< HEAD
-    const cycle = await prisma.auditCycle.findUnique({ where: { id: bId } });
-    if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
-    if (cycle.status === 'CLOSED') return res.status(400).json({ error: 'Cannot submit results to a CLOSED cycle' });
-
-    // Verify actor is assigned auditor for this cycle
-    const isAssigned = await prisma.auditAssignment.findFirst({
-      where: { cycleId: bId, auditorId: bActorId }
-    });
-    if (!isAssigned && req.user.role !== 'ADMIN') {
-      return res.status(403).json({ error: 'You are not assigned as an auditor for this cycle' });
-    }
-
-    await prisma.$transaction(async (tx) => {
-      // Upsert results
-      for (const resItem of results) {
-        const { assetId, verdict, notes } = resItem;
-        if (!assetId || !verdict) continue;
-
-        const bAssetId = BigInt(assetId);
-
-        // Find existing result
-        const existing = await tx.auditResult.findFirst({
-          where: { cycleId: bId, assetId: bAssetId }
-        });
-
-        if (existing) {
-          await tx.auditResult.update({
-            where: { id: existing.id },
-            data: { verdict, notes: notes || null, auditorId: bActorId }
-          });
-        } else {
-          await tx.auditResult.create({
-            data: {
-              cycleId: bId,
-              assetId: bAssetId,
-              auditorId: bActorId,
-              verdict,
-              notes: notes || null
-            }
-          });
-        }
-      }
-
-      // Update cycle to IN_PROGRESS if OPEN
-      if (cycle.status === 'OPEN') {
-        await tx.auditCycle.update({
-          where: { id: bId },
-=======
     const cycle = await prisma.auditCycle.findUnique({ where: { id } });
     if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
     if (cycle.status === 'CLOSED') return res.status(400).json({ error: 'Audit cycle is closed. Cannot submit new results.' });
@@ -491,20 +297,13 @@ router.put('/:id/results', authenticate, async (req, res, next) => {
       if (cycle.status === 'OPEN') {
         await tx.auditCycle.update({
           where: { id },
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
           data: { status: 'IN_PROGRESS' }
         });
       }
-    });
-
-<<<<<<< HEAD
-    res.json({ message: 'Audit results submitted successfully' });
-=======
       return saved;
     });
 
     res.json(savedResults);
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -513,25 +312,6 @@ router.put('/:id/results', authenticate, async (req, res, next) => {
 // GET /api/audits/:id/discrepancies
 router.get('/:id/discrepancies', authenticate, requireDeptHead, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const bId = BigInt(req.params.id);
-
-    const cycle = await prisma.auditCycle.findUnique({ where: { id: bId } });
-    if (!cycle) return res.status(404).json({ error: 'Audit cycle not found' });
-
-    const results = await prisma.auditResult.findMany({
-      where: {
-        cycleId: bId,
-        verdict: { in: ['MISSING', 'DAMAGED'] }
-      },
-      include: {
-        asset: true,
-        auditor: { select: { name: true, email: true } }
-      }
-    });
-
-    res.json(results);
-=======
     const id = BigInt(req.params.id);
 
     const discrepancies = await prisma.auditResult.findMany({
@@ -554,7 +334,6 @@ router.get('/:id/discrepancies', authenticate, requireDeptHead, async (req, res,
       asset: { id: r.asset.id, name: r.asset.name, tag: r.asset.tag },
       auditor: { id: r.auditor.id, name: r.auditor.name }
     })));
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }

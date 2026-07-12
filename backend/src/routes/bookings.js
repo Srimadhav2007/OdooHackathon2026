@@ -9,8 +9,6 @@ const { authenticate } = require('../middleware/auth');
 const bookingService = require('../services/bookingService');
 
 const prisma = new PrismaClient();
-<<<<<<< HEAD
-=======
 
 // Helper to map booking row
 function mapBookingRow(b) {
@@ -27,7 +25,6 @@ function mapBookingRow(b) {
     user: b.user ? { id: b.user.id, name: b.user.name } : null
   };
 }
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
 
 // GET /api/bookings
 router.get('/', authenticate, async (req, res, next) => {
@@ -35,47 +32,6 @@ router.get('/', authenticate, async (req, res, next) => {
     const { assetId, userId, status, from, to } = req.query;
     const bActorId = BigInt(req.user.id);
 
-<<<<<<< HEAD
-    let baseFilter = {};
-    if (req.user.role === 'EMPLOYEE') {
-      // Employees can see bookings of a specific asset (calendar view) or their own bookings
-      if (!assetId) {
-        baseFilter.userId = bActorId;
-      }
-    } else if (req.user.role === 'DEPT_HEAD') {
-      if (!assetId && !userId && req.user.departmentId) {
-        // Default to department employee bookings
-        const bDeptId = BigInt(req.user.departmentId);
-        baseFilter.user = { departmentId: bDeptId };
-      }
-    }
-
-    const where = {
-      ...baseFilter,
-      ...(assetId && { assetId: BigInt(assetId) }),
-      ...(userId && (req.user.role !== 'EMPLOYEE' || BigInt(userId) === bActorId) && { userId: BigInt(userId) }),
-      ...(status && { status }),
-      ...((from || to) && {
-        startTime: {
-          ...(from && { gte: new Date(from) }),
-        },
-        endTime: {
-          ...(to && { lte: new Date(to) }),
-        }
-      })
-    };
-
-    const bookings = await prisma.booking.findMany({
-      where,
-      include: {
-        asset: { select: { id: true, tag: true, name: true } },
-        user: { select: { id: true, name: true, email: true } },
-      },
-      orderBy: { startTime: 'asc' },
-    });
-
-    res.json(bookings);
-=======
     const where = {};
     if (assetId) where.assetId = BigInt(assetId);
     if (userId) where.userId = BigInt(userId);
@@ -96,7 +52,6 @@ router.get('/', authenticate, async (req, res, next) => {
     });
 
     res.json(bookings.map(mapBookingRow));
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -115,24 +70,6 @@ router.post('/', authenticate, async (req, res, next) => {
 // GET /api/bookings/:id
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const booking = await prisma.booking.findUnique({
-      where: { id: BigInt(req.params.id) },
-      include: {
-        asset: true,
-        user: { select: { id: true, name: true, email: true } },
-      },
-    });
-
-    if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-    // Security: employees can only view their own bookings
-    if (req.user.role === 'EMPLOYEE' && booking.userId !== BigInt(req.user.id)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    res.json(booking);
-=======
     const id = BigInt(req.params.id);
 
     const booking = await prisma.booking.findUnique({
@@ -148,7 +85,6 @@ router.get('/:id', authenticate, async (req, res, next) => {
     }
 
     res.json(mapBookingRow(booking));
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -167,10 +103,7 @@ router.put('/:id/cancel', authenticate, async (req, res, next) => {
 // PUT /api/bookings/:id/reschedule
 router.put('/:id/reschedule', authenticate, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-=======
     const id = BigInt(req.params.id);
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
     const { startTime, endTime } = req.body;
     const bBookingId = BigInt(req.params.id);
     const bActorId = BigInt(req.user.id);
@@ -186,53 +119,6 @@ router.put('/:id/reschedule', authenticate, async (req, res, next) => {
       return res.status(400).json({ error: 'End time must be after start time' });
     }
 
-<<<<<<< HEAD
-    // Retrieve booking
-    const booking = await prisma.booking.findUnique({ where: { id: bBookingId } });
-    if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-    // Security: verify owner or manager
-    const isOwner = booking.userId === bActorId;
-    const isManager = req.user.role === 'ADMIN' || req.user.role === 'ASSET_MANAGER';
-    if (!isOwner && !isManager) {
-      return res.status(403).json({ error: 'Access denied. You do not own this booking.' });
-    }
-
-    // Check for overlap, excluding this booking itself
-    const conflicts = await prisma.booking.findMany({
-      where: {
-        assetId: booking.assetId,
-        id: { not: bBookingId },
-        status: { in: ['UPCOMING', 'ONGOING'] },
-        startTime: { lt: end },
-        endTime: { gt: start },
-      },
-    });
-
-    if (conflicts.length > 0) {
-      return res.status(409).json({ error: 'Overlaps with another existing booking' });
-    }
-
-    const updatedBooking = await prisma.$transaction(async (tx) => {
-      const b = await tx.booking.update({
-        where: { id: bBookingId },
-        data: { startTime: start, endTime: end },
-      });
-
-      await tx.activityLog.create({
-        data: {
-          actorId: bActorId,
-          action: 'RESCHEDULED_BOOKING',
-          entity: 'BOOKING',
-          entityId: bBookingId,
-          metadata: { startTime, endTime },
-        },
-      });
-
-      return b;
-    });
-
-=======
     const updatedBooking = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({ where: { id } });
       
@@ -289,7 +175,6 @@ router.put('/:id/reschedule', authenticate, async (req, res, next) => {
       return updated;
     });
 
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
     res.json(updatedBooking);
   } catch (err) {
     next(err);

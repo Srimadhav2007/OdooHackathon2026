@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Bell, Search, User, Settings, LogOut, Command, ArrowRight, Laptop, Building2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Navbar() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   // Listen for Cmd+K or Ctrl+K to open the Command Palette
   useEffect(() => {
@@ -21,9 +23,22 @@ export default function Navbar() {
   }, []);
 
   const handleLogout = () => {
-    // In a real app, clear JWT here
+    logout();
+    setIsProfileOpen(false);
     navigate('/login');
   };
+
+  // Get user initials for avatar
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+    : 'U';
+
+  const roleLabel = {
+    ADMIN: 'System Administrator',
+    ASSET_MANAGER: 'Asset Manager',
+    DEPT_HEAD: 'Department Head',
+    EMPLOYEE: 'Employee',
+  }[user?.role] || user?.role || 'User';
 
   return (
     <>
@@ -59,7 +74,7 @@ export default function Navbar() {
               className="flex items-center gap-3 rounded-full focus:outline-none focus:ring-2 focus:ring-violet-600 focus:ring-offset-2"
             >
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-violet-600 to-purple-600 text-sm font-bold text-white shadow-sm">
-                AD
+                {initials}
               </div>
             </button>
 
@@ -72,8 +87,9 @@ export default function Navbar() {
                   className="absolute right-0 mt-2 w-56 rounded-2xl border border-slate-100 bg-white p-2 shadow-xl"
                 >
                   <div className="border-b border-slate-100 px-3 py-2 mb-2">
-                    <p className="text-sm font-semibold text-slate-900">Alicia Dean</p>
-                    <p className="text-xs text-slate-500">System Administrator</p>
+                    <p className="text-sm font-semibold text-slate-900">{user?.name || 'User'}</p>
+                    <p className="text-xs text-slate-500">{roleLabel}</p>
+                    <p className="text-xs text-slate-400 truncate">{user?.email}</p>
                   </div>
                   <button className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 hover:text-slate-900">
                     <User size={16} /> My Profile

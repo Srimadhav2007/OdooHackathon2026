@@ -7,33 +7,80 @@ import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import StatCard from '../components/ui/StatCard';
 import { useNavigate } from 'react-router-dom';
-
-const kpis = [
-  { title: 'Assets', value: '284', change: '+12 this month', icon: Boxes, tone: 'violet' },
-  { title: 'Allocated', value: '176', change: '+8 today', icon: PackageCheck, tone: 'emerald' },
-  { title: 'Maintenance', value: '14', change: '3 urgent', icon: AlertTriangle, tone: 'amber' },
-  { title: 'Bookings', value: '31', change: '+5 upcoming', icon: CalendarClock, tone: 'sky' },
-];
-
-const activities = [
-  { title: 'Laptop 14 assigned to Finance', time: '10 min ago', tone: 'success' },
-  { title: 'Printer maintenance scheduled', time: '42 min ago', tone: 'warning' },
-  { title: 'Quarterly audit report generated', time: '1 hr ago', tone: 'info' },
-];
-
-const maintenance = [
-  { title: 'Conference monitor', owner: 'Operations', due: 'Today' },
-  { title: 'Warehouse scanner', owner: 'Logistics', due: 'Tomorrow' },
-];
+import api from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  
+  const [stats, setStats] = useState({
+    assetsAvailable: 0,
+    assetsAllocated: 0,
+    maintenanceToday: 0,
+    activeBookings: 0,
+  });
+  const [deptStats, setDeptStats] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [maintenance, setMaintenance] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchDashboard = async () => {
+      try {
+        const [dashRes, allocStatsRes, notifRes, maintRes] = await Promise.all([
+          api.get('/reports/dashboard'),
+          api.get('/reports/departments'),
+          api.get('/notifications'),
+          api.get('/maintenance'),
+        ]);
+        setStats(dashRes.data);
+        setDeptStats(allocStatsRes.data);
+
+        if (notifRes.data) {
+          setNotifications(notifRes.data.slice(0, 3).map(n => ({
+            title: n.title, detail: n.message, tone: n.type === 'ALERT' ? 'warning' : 'info'
+          })));
+          setActivities(notifRes.data.slice(0, 4).map(n => ({
+            title: n.title, time: new Date(n.createdAt).toLocaleDateString(), tone: n.type === 'ALERT' ? 'warning' : 'success'
+          })));
+        }
+
+        if (maintRes.data) {
+          setMaintenance(maintRes.data.filter(m => m.status === 'PENDING').slice(0, 3).map(m => ({
+            title: m.asset?.name || 'Asset', due: 'Pending', owner: m.raisedBy?.name || 'Unknown'
+          })));
+        }
+      } catch (error) {
+        console.error("Failed to load dashboard data", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchDashboard();
+  }, []);
+
+  const kpis = [
+    { title: 'Assets Available', value: stats.assetsAvailable, change: 'Ready for use', icon: Boxes, tone: 'violet' },
+    { title: 'Allocated', value: stats.assetsAllocated, change: 'Currently assigned', icon: PackageCheck, tone: 'emerald' },
+    { title: 'Maintenance', value: stats.maintenanceToday, change: 'Raised today', icon: AlertTriangle, tone: 'amber' },
+    { title: 'Bookings', value: stats.activeBookings, change: 'Active', icon: CalendarClock, tone: 'sky' },
+  ];
+
   const [toastMessage, setToastMessage] = useState('');
 
   const triggerToast = (message) => {
     setToastMessage(message);
     setTimeout(() => setToastMessage(''), 3000); // Auto-hide after 3 seconds
   };
+
+  const totalAssets = stats.assetsAvailable + stats.assetsAllocated;
+  const C = 251.2;
+  const allocatedPct = totalAssets ? (stats.assetsAllocated / totalAssets) : 0;
+  
+  const layer1Offset = C - (allocatedPct * C);
+  const layer2Offset = C;
 
   return (
     <div className="mx-auto max-w-7xl relative pb-12">
@@ -55,7 +102,7 @@ export default function DashboardPage() {
 
       <PageHeader
         eyebrow="Overview"
-        title="Welcome back, Admin"
+        title={`Welcome back, ${user?.name || 'User'}`}
         description="A calm view of your asset operations across departments."
         actions={[
           <Button key="1" variant="primary" onClick={() => navigate('/bookings')}>+ New booking</Button>,
@@ -78,8 +125,8 @@ export default function DashboardPage() {
               <Badge tone="violet">Live</Badge>
             </div>
             <div className="mt-4 space-y-3">
-              {activities.map((item) => (
-                <div key={item.title} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+              {activities.map((item, index) => (
+                <div key={item.title + index} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
                   <div className="flex items-center gap-3">
                     <div className="rounded-full bg-white p-2 text-slate-600 shadow-sm"><Sparkles size={16} /></div>
                     <div>
@@ -100,8 +147,8 @@ export default function DashboardPage() {
                 <Button variant="ghost" className="px-3 py-2" onClick={() => navigate('/maintenance')}>View all</Button>
               </div>
               <div className="mt-4 space-y-3">
-                {maintenance.map((item) => (
-                  <div key={item.title} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                {maintenance.map((item, index) => (
+                  <div key={item.title + index} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-medium text-slate-800">{item.title}</p>
                       <Badge tone="warning">{item.due}</Badge>
@@ -118,19 +165,16 @@ export default function DashboardPage() {
                 <ArrowRight size={16} className="text-slate-400" />
               </div>
               <div className="mt-4 space-y-3">
-                {[
-                  ['Finance', '42 assets'],
-                  ['Operations', '67 assets'],
-                  ['HR', '24 assets'],
-                ].map(([name, count]) => (
-                  <div key={name} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+                {deptStats.slice(0, 4).map((dept, index) => (
+                  <div key={dept.department || index} className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
                     <div className="flex items-center gap-2">
                       <Users size={15} className="text-slate-400" />
-                      <span className="text-sm font-medium text-slate-700">{name}</span>
+                      <span className="text-sm font-medium text-slate-700">{dept.department || 'Unknown'}</span>
                     </div>
-                    <span className="text-sm text-slate-500">{count}</span>
+                    <span className="text-sm text-slate-500">{dept.totalAssets || 0} assets</span>
                   </div>
                 ))}
+                {deptStats.length === 0 && <p className="text-sm text-slate-500 text-center py-4">No data available</p>}
               </div>
             </Card>
           </div>
@@ -149,14 +193,14 @@ export default function DashboardPage() {
                 <svg viewBox="0 0 100 100" className="-rotate-90 h-full w-full drop-shadow-md">
                   {/* Background Track (Available) */}
                   <circle cx="50" cy="50" r="40" fill="transparent" stroke="#10b981" strokeWidth="16" />
-                  {/* Segment 2 (Allocated - 60%) */}
-                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#8b5cf6" strokeWidth="16" strokeDasharray="251.2" strokeDashoffset="100.48" className="transition-all duration-1000 ease-out" />
-                  {/* Segment 3 (Maintenance - 15%) */}
-                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#f59e0b" strokeWidth="16" strokeDasharray="251.2" strokeDashoffset="213.52" className="transition-all duration-1000 ease-out" />
+                  {/* Layer 1 (Allocated + Maintenance) */}
+                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#8b5cf6" strokeWidth="16" strokeDasharray="251.2" strokeDashoffset={layer1Offset} className="transition-all duration-1000 ease-out" />
+                  {/* Layer 2 (Maintenance) */}
+                  <circle cx="50" cy="50" r="40" fill="transparent" stroke="#f59e0b" strokeWidth="16" strokeDasharray="251.2" strokeDashoffset={layer2Offset} className="transition-all duration-1000 ease-out" />
                 </svg>
                 {/* Center Label */}
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-2xl font-bold text-slate-900">284</span>
+                  <span className="text-2xl font-bold text-slate-900">{totalAssets}</span>
                   <span className="text-xs font-medium text-slate-500">Total</span>
                 </div>
               </div>

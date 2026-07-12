@@ -15,19 +15,6 @@ router.get('/', authenticate, async (req, res, next) => {
     const bActorId = BigInt(req.user.id);
     const { unreadOnly } = req.query;
 
-<<<<<<< HEAD
-    const where = {
-      recipientId: bActorId,
-      ...(unreadOnly === 'true' && { isRead: false }),
-    };
-
-    const list = await prisma.notification.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-    });
-
-    res.json(list);
-=======
     const where = { recipientId: BigInt(actor.id) };
 
     if (isRead !== undefined) {
@@ -60,7 +47,6 @@ router.get('/', authenticate, async (req, res, next) => {
       })),
       unreadCount
     });
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }
@@ -72,13 +58,8 @@ router.put('/read-all', authenticate, async (req, res, next) => {
     const bActorId = BigInt(req.user.id);
 
     await prisma.notification.updateMany({
-<<<<<<< HEAD
-      where: { recipientId: bActorId, isRead: false },
-      data: { isRead: true },
-=======
       where: { recipientId: BigInt(actor.id), isRead: false },
       data: { isRead: true }
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
     });
 
     res.json({ message: 'All notifications marked as read' });
@@ -90,21 +71,6 @@ router.put('/read-all', authenticate, async (req, res, next) => {
 // PUT /api/notifications/:id/read
 router.put('/:id/read', authenticate, async (req, res, next) => {
   try {
-<<<<<<< HEAD
-    const bId = BigInt(req.params.id);
-    const bActorId = BigInt(req.user.id);
-
-    const notif = await prisma.notification.findUnique({ where: { id: bId } });
-    if (!notif) return res.status(404).json({ error: 'Notification not found' });
-    if (notif.recipientId !== bActorId) return res.status(403).json({ error: 'Access denied' });
-
-    const updated = await prisma.notification.update({
-      where: { id: bId },
-      data: { isRead: true },
-    });
-
-    res.json(updated);
-=======
     const id = BigInt(req.params.id);
     const actor = req.user;
 
@@ -156,7 +122,6 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     });
 
     res.json({ message: 'Notification deleted successfully' });
->>>>>>> 2e1280413545e9608bcb4e06d9acef3b88f6215a
   } catch (err) {
     next(err);
   }

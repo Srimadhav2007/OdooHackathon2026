@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import api from '../utils/api';
 import { Wrench, AlertCircle, Plus, Search, CheckCircle, ShieldAlert, X } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -28,28 +29,65 @@ export default function MaintenancePage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const [requests, setRequests] = useState([
-    { id: 'TKT-042', assetTag: 'AF-0003', assetName: 'Conference Projector', issue: 'Lamp burning out, flickering', priority: 'High', status: 'Pending Approval', requestedBy: 'Operations', date: '2026-07-12' },
-    { id: 'TKT-041', assetTag: 'AF-0112', assetName: 'Warehouse Scanner', issue: 'Battery not holding charge', priority: 'Medium', status: 'In Progress', assignedTo: 'Tech Support - Bob', date: '2026-07-11' },
-    { id: 'TKT-039', assetTag: 'AF-0089', assetName: 'MacBook Air', issue: 'Keyboard sticky keys', priority: 'Low', status: 'Resolved', assignedTo: 'Apple Care', date: '2026-07-09' },
-  ]);
+  const [requests, setRequests] = useState([]);
+  const [assets, setAssets] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const filteredRequests = requests.filter(r => 
-    (activeTab === 'active' ? r.status !== 'Resolved' : r.status === 'Resolved') &&
-    (r.id.toLowerCase().includes(searchQuery.toLowerCase()) || r.assetTag.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
-
-  const resolveTicket = (id) => {
-    setRequests(requests.map(r => r.id === id ? { ...r, status: 'Resolved' } : r));
+  const fetchMaintenance = async () => {
+    try {
+      const [maintRes, assetsRes] = await Promise.all([
+        api.get('/maintenance'),
+        api.get('/assets')
+      ]);
+      setRequests(maintRes.data || []);
+      setAssets(assetsRes.data.assets || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const getPriorityBadge = (priority) => priority === 'High' ? <Badge tone="error">High Priority</Badge> : priority === 'Medium' ? <Badge tone="warning">Medium</Badge> : <Badge tone="info">Low</Badge>;
-  const getStatusBadge = (status) => status === 'Pending Approval' ? <Badge tone="warning">Pending Approval</Badge> : status === 'In Progress' ? <Badge tone="sky">In Progress</Badge> : status === 'Resolved' ? <Badge tone="success">Resolved</Badge> : <Badge tone="neutral">{status}</Badge>;
+  useEffect(() => {
+    fetchMaintenance();
+  }, []);
 
-  const handleRaiseRequest = (e) => {
+  const filteredRequests = requests.filter(r => 
+    (activeTab === 'active' ? (r.status === 'PENDING' || r.status === 'IN_PROGRESS') : r.status === 'RESOLVED' || r.status === 'REJECTED') &&
+    (r.id?.toString().includes(searchQuery) || r.asset?.tag?.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
+
+  const resolveTicket = async (id, newStatus) => {
+    try {
+      if (newStatus === 'IN_PROGRESS') {
+        await api.put(`/maintenance/${id}/start`);
+      } else if (newStatus === 'RESOLVED') {
+        await api.put(`/maintenance/${id}/resolve`, { resolutionNotes: 'Completed' });
+      }
+      fetchMaintenance();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update ticket status');
+    }
+  };
+
+  const getPriorityBadge = (priority) => priority === 'HIGH' ? <Badge tone="error">High Priority</Badge> : priority === 'MEDIUM' ? <Badge tone="warning">Medium</Badge> : <Badge tone="info">Low</Badge>;
+  const getStatusBadge = (status) => status === 'PENDING' ? <Badge tone="warning">Pending Approval</Badge> : status === 'IN_PROGRESS' ? <Badge tone="sky">In Progress</Badge> : status === 'RESOLVED' ? <Badge tone="success">Resolved</Badge> : <Badge tone="neutral">{status}</Badge>;
+
+  const handleRaiseRequest = async (e) => {
     e.preventDefault();
-    setRequests([{ id: `TKT-0${requests.length + 40}`, assetTag: e.target.asset.value.split(' ')[0], assetName: 'Reported Asset', issue: e.target.issue.value, priority: e.target.priority.value, status: 'Pending Approval', requestedBy: 'You', date: new Date().toISOString().split('T')[0] }, ...requests]);
-    setIsModalOpen(false);
+    try {
+      await api.post('/maintenance', {
+        assetId: e.target.assetId.value,
+        issue: e.target.issue.value,
+        priority: e.target.priority.value
+      });
+      setIsModalOpen(false);
+      fetchMaintenance();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to raise request');
+    }
   };
 
   return (
@@ -62,21 +100,21 @@ export default function MaintenancePage() {
           <div className="rounded-full bg-amber-100 p-3 text-amber-600"><ShieldAlert size={24} /></div>
           <div>
             <p className="text-sm font-medium text-slate-500">Pending Approvals</p>
-            <p className="text-2xl font-bold text-slate-900">{requests.filter(r => r.status === 'Pending Approval').length}</p>
+            <p className="text-2xl font-bold text-slate-900">{requests.filter(r => r.status === 'PENDING').length}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 border-l-4 border-sky-500 p-5">
           <div className="rounded-full bg-sky-100 p-3 text-sky-600"><Wrench size={24} /></div>
           <div>
             <p className="text-sm font-medium text-slate-500">In Progress</p>
-            <p className="text-2xl font-bold text-slate-900">{requests.filter(r => r.status === 'In Progress').length}</p>
+            <p className="text-2xl font-bold text-slate-900">{requests.filter(r => r.status === 'IN_PROGRESS').length}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 border-l-4 border-emerald-500 p-5">
           <div className="rounded-full bg-emerald-100 p-3 text-emerald-600"><CheckCircle size={24} /></div>
           <div>
             <p className="text-sm font-medium text-slate-500">Recently Resolved</p>
-            <p className="text-2xl font-bold text-slate-900">{requests.filter(r => r.status === 'Resolved').length}</p>
+            <p className="text-2xl font-bold text-slate-900">{requests.filter(r => r.status === 'RESOLVED').length}</p>
           </div>
         </Card>
       </div>
@@ -102,17 +140,40 @@ export default function MaintenancePage() {
                   <tr><th className="px-6 py-3 font-medium">Ticket / Asset</th><th className="px-6 py-3 font-medium">Issue Detail</th><th className="px-6 py-3 font-medium">Priority</th><th className="px-6 py-3 font-medium">Status</th><th className="px-6 py-3 text-right font-medium">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredRequests.map((row) => (
-                    <tr key={row.id} className="transition-colors hover:bg-slate-50">
-                      <td className="px-6 py-4"><div className="font-medium text-slate-900">{row.id}</div><div className="text-xs font-semibold text-violet-600">{row.assetTag}</div></td>
-                      <td className="px-6 py-4 max-w-xs"><div className="truncate text-slate-900">{row.issue}</div><div className="text-xs text-slate-400">Reported on {row.date}</div></td>
-                      <td className="px-6 py-4">{getPriorityBadge(row.priority)}</td>
-                      <td className="px-6 py-4">{getStatusBadge(row.status)}</td>
-                      <td className="px-6 py-4 text-right">
-                        {row.status === 'In Progress' && <Button variant="ghost" onClick={() => resolveTicket(row.id)} className="px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-50">Mark Resolved</Button>}
-                      </td>
-                    </tr>
-                  ))}
+                  {loading ? (
+                  <tr><td colSpan="6" className="py-8 text-center text-slate-500">Loading...</td></tr>
+                ) : filteredRequests.map((row) => (
+                  <tr key={row.id} className="transition-colors hover:bg-slate-50">
+                    <td className="px-6 py-4">
+                      <div className="font-semibold text-slate-900">TKT-{row.id}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-slate-900">{row.asset?.tag}</div>
+                      <div className="text-xs text-slate-500">{row.asset?.name}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-medium text-slate-900">{row.issue}</div>
+                      <div className="mt-1">{getPriorityBadge(row.priority)}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-slate-900">{row.raisedBy?.name}</div>
+                      <div className="text-xs text-slate-500">{new Date(row.createdAt).toLocaleDateString()}</div>
+                    </td>
+                    <td className="px-6 py-4">{getStatusBadge(row.status)}</td>
+                    <td className="px-6 py-4 text-right">
+                      {row.status === 'PENDING' && (
+                        <div className="flex justify-end gap-2">
+                          <Button variant="secondary" onClick={() => resolveTicket(row.id, 'IN_PROGRESS')} className="px-3 py-1 text-xs">Start</Button>
+                        </div>
+                      )}
+                      {row.status === 'IN_PROGRESS' && (
+                        <div className="flex justify-end gap-2">
+                          <Button variant="ghost" onClick={() => resolveTicket(row.id, 'RESOLVED')} className="px-3 py-1 text-xs">Resolve</Button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
                 </tbody>
               </table>
             </div>
@@ -124,8 +185,9 @@ export default function MaintenancePage() {
         <form onSubmit={handleRaiseRequest} className="space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Select Asset</label>
-            <select name="asset" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
-              <option value="AF-0044 - Desktop PC">AF-0044 - Desktop PC</option>
+            <select name="assetId" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
+              <option value="" disabled>Choose an asset...</option>
+              {assets.map(a => <option key={a.id} value={a.id}>{a.tag} - {a.name}</option>)}
             </select>
           </div>
           <div>

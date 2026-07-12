@@ -1,9 +1,13 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, ArrowRight, Mail, Lock, User, AlertCircle } from 'lucide-react';
 import Button from '../components/ui/Button';
+import { useAuth } from '../context/AuthContext';
 
-export default function AuthPage({ onLogin }) {
+export default function AuthPage() {
+  const navigate = useNavigate();
+  const { login, register } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [error, setError] = useState('');
   const [formData, setFormData] = useState({
@@ -29,7 +33,7 @@ export default function AuthPage({ onLogin }) {
   const strengthLabels = ['Very Weak', 'Weak', 'Fair', 'Good', 'Strong'];
   const strengthColors = ['bg-red-500', 'bg-orange-500', 'bg-amber-500', 'bg-emerald-400', 'bg-emerald-600'];
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -44,8 +48,16 @@ export default function AuthPage({ onLogin }) {
       }
     }
     
-    console.log(`Submitting ${isLogin ? 'Login' : 'Signup'} with:`, formData);
-    onLogin();
+    try {
+      if (isLogin) {
+        await login(formData.email, formData.password);
+      } else {
+        await register(formData.name, formData.email, formData.password);
+      }
+      navigate('/dashboard');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Authentication failed');
+    }
   };
 
   return (
@@ -129,13 +141,16 @@ export default function AuthPage({ onLogin }) {
                   animate={{ opacity: 1, height: 'auto' }}
                   className="space-y-1.5"
                 >
-                  <label className="block text-sm font-medium text-slate-700">Full Name</label>
+                  <label htmlFor="name" className="block text-sm font-medium text-slate-700">Full Name</label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
                       <User size={18} />
                     </div>
                     <input
+                      id="name"
+                      name="name"
                       type="text"
+                      autoComplete="name"
                       required={!isLogin}
                       className="block w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-slate-900 focus:border-violet-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-violet-600 sm:text-sm transition-colors"
                       placeholder="John Doe"
@@ -147,13 +162,16 @@ export default function AuthPage({ onLogin }) {
               )}
 
               <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-slate-700">Email address</label>
+                <label htmlFor="email" className="block text-sm font-medium text-slate-700">Email address</label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
                     <Mail size={18} />
                   </div>
                   <input
+                    id="email"
+                    name="email"
                     type="email"
+                    autoComplete="email"
                     required
                     className="block w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-slate-900 focus:border-violet-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-violet-600 sm:text-sm transition-colors"
                     placeholder="you@company.com"
@@ -165,7 +183,7 @@ export default function AuthPage({ onLogin }) {
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium text-slate-700">Password</label>
+                  <label htmlFor="password" className="block text-sm font-medium text-slate-700">Password</label>
                   {isLogin && (
                     <a href="#" className="text-sm font-medium text-violet-600 hover:text-violet-500">
                       Forgot password?
@@ -177,7 +195,10 @@ export default function AuthPage({ onLogin }) {
                     <Lock size={18} />
                   </div>
                   <input
+                    id="password"
+                    name="password"
                     type="password"
+                    autoComplete={isLogin ? 'current-password' : 'new-password'}
                     required
                     className="block w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-slate-900 focus:border-violet-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-violet-600 sm:text-sm transition-colors"
                     placeholder="••••••••"
@@ -210,13 +231,16 @@ export default function AuthPage({ onLogin }) {
                   animate={{ opacity: 1, height: 'auto' }}
                   className="space-y-1.5"
                 >
-                  <label className="block text-sm font-medium text-slate-700">Confirm Password</label>
+                  <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700">Confirm Password</label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
                       <Lock size={18} />
                     </div>
                     <input
+                      id="confirmPassword"
+                      name="confirmPassword"
                       type="password"
+                      autoComplete="new-password"
                       required={!isLogin}
                       className="block w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-slate-900 focus:border-violet-600 focus:bg-white focus:outline-none focus:ring-1 focus:ring-violet-600 sm:text-sm transition-colors"
                       placeholder="••••••••"

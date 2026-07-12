@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import api from '../utils/api';
 import { ClipboardCheck, ShieldAlert, Plus, Search, CheckCircle, AlertTriangle, X, FileText, Check, XCircle } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -29,26 +30,50 @@ export default function AuditPage() {
   const [selectedAudit, setSelectedAudit] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const [audits, setAudits] = useState([
-    { id: 'ADT-2026-Q3', name: 'Q3 Electronics Audit', scope: 'HQ - Engineering', startDate: '2026-07-10', endDate: '2026-07-20', auditor: 'Priya Sharma', progress: 65, totalAssets: 120, status: 'In Progress', discrepancies: 2 },
-    { id: 'ADT-2026-V1', name: 'Fleet Vehicle Check', scope: 'Logistics', startDate: '2026-07-12', endDate: '2026-07-15', auditor: 'David Cho', progress: 0, totalAssets: 15, status: 'Pending Start', discrepancies: 0 },
-    { id: 'ADT-2026-Q2', name: 'Q2 Furniture Inventory', scope: 'All Departments', startDate: '2026-04-01', endDate: '2026-04-10', auditor: 'Alicia Dean', progress: 100, totalAssets: 340, status: 'Closed', discrepancies: 5 },
-  ]);
+  const [audits, setAudits] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = async () => {
+    try {
+      const [auditsRes, deptRes] = await Promise.all([
+        api.get('/audits'),
+        api.get('/departments')
+      ]);
+      setAudits(auditsRes.data || []);
+      setDepartments(deptRes.data || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const filteredAudits = audits.filter(a => 
-    (activeTab === 'active' ? a.status !== 'Closed' : a.status === 'Closed') &&
-    a.name.toLowerCase().includes(searchQuery.toLowerCase())
+    (activeTab === 'active' ? a.status !== 'CLOSED' : a.status === 'CLOSED') &&
+    a.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const [auditItems, setAuditItems] = useState([
-    { tag: 'AF-0114', name: 'ThinkPad T14', status: 'Pending' },
-    { tag: 'AF-0115', name: 'Dell UltraSharp 27"', status: 'Verified' },
-  ]);
-
-  const handleCreateSubmit = (e) => {
+  const handleCreateSubmit = async (e) => {
     e.preventDefault();
-    setAudits([{ id: `ADT-2026-N${audits.length + 1}`, name: e.target.auditName.value, scope: e.target.scope.value, startDate: e.target.startDate.value, endDate: e.target.endDate.value, auditor: e.target.auditor.value, progress: 0, totalAssets: 50, status: 'Pending Start', discrepancies: 0 }, ...audits]);
-    setIsCreateModalOpen(false);
+    try {
+      await api.post('/audits', {
+        name: e.target.auditName.value,
+        scopeType: 'DEPARTMENT',
+        scopeValue: e.target.scope.value,
+        startDate: e.target.startDate.value,
+        endDate: e.target.endDate.value,
+      });
+      setIsCreateModalOpen(false);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to create audit');
+    }
   };
 
   const markAsset = (tag, status) => setAuditItems(prev => prev.map(item => item.tag === tag ? { ...item, status } : item));
@@ -63,14 +88,14 @@ export default function AuditPage() {
           <div className="rounded-full bg-violet-100 p-3 text-violet-700"><ClipboardCheck size={24} /></div>
           <div>
             <p className="text-sm font-medium text-slate-500">Active Cycles</p>
-            <p className="text-2xl font-bold text-slate-900">{audits.filter(a => a.status !== 'Closed').length}</p>
+            <p className="text-2xl font-bold text-slate-900">{audits.filter(a => a.status !== 'CLOSED').length}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 border-l-4 border-amber-500 p-5">
           <div className="rounded-full bg-amber-100 p-3 text-amber-600"><ShieldAlert size={24} /></div>
           <div>
-            <p className="text-sm font-medium text-slate-500">Discrepancies Found</p>
-            <p className="text-2xl font-bold text-slate-900">{audits.reduce((acc, curr) => acc + (curr.status === 'In Progress' ? curr.discrepancies : 0), 0)}</p>
+            <p className="text-sm font-medium text-slate-500">Total Audits</p>
+            <p className="text-2xl font-bold text-slate-900">{audits.length}</p>
           </div>
         </Card>
         <Card className="flex items-center gap-4 border-l-4 border-emerald-500 p-5">
@@ -103,23 +128,30 @@ export default function AuditPage() {
                   <tr><th className="px-6 py-3 font-medium">Audit Cycle</th><th className="px-6 py-3 font-medium">Scope & Auditor</th><th className="px-6 py-3 font-medium">Timeline</th><th className="px-6 py-3 font-medium">Progress</th><th className="px-6 py-3 text-right font-medium">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredAudits.map((row) => (
-                    <tr key={row.id} className="transition-colors hover:bg-slate-50">
-                      <td className="px-6 py-4"><div className="font-semibold text-slate-900">{row.name}</div><div className="text-xs text-slate-500">{row.id}</div></td>
-                      <td className="px-6 py-4"><div className="text-slate-900">{row.scope}</div><div className="text-xs text-slate-500">Assigned: {row.auditor}</div></td>
-                      <td className="px-6 py-4"><div className="text-slate-900">{row.startDate}</div><div className="text-xs text-slate-500">to {row.endDate}</div></td>
-                      <td className="px-6 py-4 w-48">
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-slate-700">{row.progress}%</span>
-                          {row.discrepancies > 0 && <span className="text-amber-600 font-medium">{row.discrepancies} Flags</span>}
-                        </div>
-                        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"><div className={`h-2 rounded-full ${row.progress === 100 ? 'bg-emerald-500' : 'bg-violet-500'}`} style={{ width: `${row.progress}%` }}></div></div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        {row.status === 'Closed' ? <Button variant="ghost" className="px-2 py-1 text-xs"><FileText size={14} className="mr-1"/> Report</Button> : <Button variant="secondary" onClick={() => { setSelectedAudit(row); setIsConductModalOpen(true); }} className="px-3 py-1 text-xs shadow-none">Conduct Audit</Button>}
-                      </td>
-                    </tr>
-                  ))}
+                  {loading ? (
+                  <tr><td colSpan="7" className="py-8 text-center text-slate-500">Loading...</td></tr>
+                ) : filteredAudits.map((row) => (
+                  <tr key={row.id} className="transition-colors hover:bg-slate-50">
+                    <td className="px-6 py-4">
+                      <div className="font-semibold text-slate-900">{row.name}</div>
+                      <div className="text-xs text-slate-500">ID: {row.id}</div>
+                    </td>
+                    <td className="px-6 py-4">{row.scopeValue || 'Global'}</td>
+                    <td className="px-6 py-4 text-slate-500">{new Date(row.startDate).toLocaleDateString()} - {new Date(row.endDate).toLocaleDateString()}</td>
+                    <td className="px-6 py-4">{row._count?.assignments || 0}</td>
+                    <td className="px-6 py-4">{row._count?.results || 0}</td>
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${row.status === 'CLOSED' ? 'bg-emerald-100 text-emerald-800' : 'bg-sky-100 text-sky-800'}`}>
+                        {row.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {row.status !== 'CLOSED' && (
+                        <Button variant="ghost" onClick={() => { setSelectedAudit(row); setIsConductModalOpen(true); }} className="px-2 py-1 text-xs">Manage</Button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
                 </tbody>
               </table>
             </div>
@@ -131,36 +163,24 @@ export default function AuditPage() {
         <form onSubmit={handleCreateSubmit} className="space-y-4">
           <div><label className="mb-1 block text-sm font-medium text-slate-700">Audit Name</label><input name="auditName" type="text" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600" /></div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Scope</label>
-            <select name="scope" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600"><option>All Departments</option></select>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Scope / Department</label>
+            <select name="scope" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600">
+              <option value="">Select Department</option>
+              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div><label className="mb-1 block text-sm font-medium text-slate-700">Start</label><input name="startDate" type="date" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600" /></div>
             <div><label className="mb-1 block text-sm font-medium text-slate-700">End</label><input name="endDate" type="date" required className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600" /></div>
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Assign Auditor</label>
-            <select name="auditor" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-1 focus:ring-violet-600"><option>Alicia Dean</option></select>
           </div>
           <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4"><Button type="button" variant="ghost" onClick={() => setIsCreateModalOpen(false)}>Cancel</Button><Button type="submit" variant="primary">Launch</Button></div>
         </form>
       </Modal>
 
       <Modal isOpen={isConductModalOpen} onClose={() => setIsConductModalOpen(false)} title={`Conducting: ${selectedAudit?.name}`} maxWidth="max-w-2xl">
-        <div className="mb-4 flex items-center justify-between rounded-xl bg-slate-50 p-3 border border-slate-100">
-          <div><p className="text-sm font-medium text-slate-900">Scan or Verify Assets</p><p className="text-xs text-slate-500">Total Items: {selectedAudit?.totalAssets}</p></div>
-        </div>
-        <div className="space-y-3">
-          {auditItems.map((item) => (
-            <div key={item.tag} className="flex items-center justify-between rounded-xl border border-slate-100 p-3 hover:bg-slate-50">
-              <div><p className="font-semibold text-slate-900">{item.tag}</p><p className="text-xs text-slate-500">{item.name}</p></div>
-              <div className="flex gap-2">
-                <button onClick={() => markAsset(item.tag, 'Verified')} className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${item.status === 'Verified' ? 'bg-emerald-100 text-emerald-700' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}><Check size={14} /> Verified</button>
-                <button onClick={() => markAsset(item.tag, 'Damaged')} className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${item.status === 'Damaged' ? 'bg-amber-100 text-amber-700' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}><AlertTriangle size={14} /> Damaged</button>
-              </div>
-            </div>
-          ))}
-        </div>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-500">Asset verification logic is handled in the backend by creating an assignment. UI can be extended to view assignments here.</p>
+          </div>
         <div className="mt-6 flex justify-between items-center border-t border-slate-100 pt-4">
           <p className="text-xs text-slate-500">Progress saved automatically.</p>
           <div className="flex gap-3"><Button type="button" variant="ghost" onClick={() => setIsConductModalOpen(false)}>Pause Audit</Button><Button type="button" variant="primary" className="bg-emerald-600">Close Audit</Button></div>
