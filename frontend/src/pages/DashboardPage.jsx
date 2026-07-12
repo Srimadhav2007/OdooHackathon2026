@@ -62,8 +62,8 @@ export default function DashboardPage() {
   }, []);
 
   const kpis = [
-    { title: 'Assets Available', value: stats.assetsAvailable, change: 'Ready for use', icon: Boxes, tone: 'violet' },
-    { title: 'Allocated', value: stats.assetsAllocated, change: 'Currently assigned', icon: PackageCheck, tone: 'emerald' },
+    { title: 'Assets Available', value: stats.assetsAvailable, change: 'Ready for use', icon: Boxes, tone: 'emerald' },
+    { title: 'Allocated', value: stats.assetsAllocated, change: 'Currently assigned', icon: PackageCheck, tone: 'violet' },
     { title: 'Maintenance', value: stats.maintenanceToday, change: 'Raised today', icon: AlertTriangle, tone: 'amber' },
     { title: 'Bookings', value: stats.activeBookings, change: 'Active', icon: CalendarClock, tone: 'sky' },
   ];

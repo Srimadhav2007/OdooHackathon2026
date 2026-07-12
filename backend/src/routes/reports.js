@@ -171,7 +171,7 @@ router.get('/maintenance', authenticate, requireDeptHead, async (req, res, next)
 });
 
 // GET /api/reports/allocations
-router.get('/allocations', authenticate, requireDeptHead, async (req, res, next) => {
+router.get('/allocations', authenticate, async (req, res, next) => {
   try {
     const result = await prisma.$queryRaw`
       SELECT 
@@ -188,6 +188,39 @@ router.get('/allocations', authenticate, requireDeptHead, async (req, res, next)
       const totalEmployees = Number(r.totalEmployees) || 0;
       const assetsPerEmployee = totalEmployees > 0 ? (totalAssets / totalEmployees).toFixed(2) : 0;
       return {
+        department: r.department,
+        departmentName: r.department,
+        totalAssets,
+        employeeCount: totalEmployees,
+        assetsPerEmployee
+      };
+    });
+
+    res.json(allocations);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/reports/departments (alias to allocations for dashboard compatibility)
+router.get('/departments', authenticate, async (req, res, next) => {
+  try {
+    const result = await prisma.$queryRaw`
+      SELECT 
+        d.name AS department,
+        (SELECT COUNT(*)::int FROM allocation a WHERE a.department_id = d.id AND a.status = 'ACTIVE') AS "totalAssets",
+        (SELECT COUNT(*)::int FROM employee e WHERE e.department_id = d.id AND e.status = true) AS "totalEmployees"
+      FROM department d
+      WHERE d.status = true
+      ORDER BY d.name ASC
+    `;
+
+    const allocations = result.map(r => {
+      const totalAssets = Number(r.totalAssets) || 0;
+      const totalEmployees = Number(r.totalEmployees) || 0;
+      const assetsPerEmployee = totalEmployees > 0 ? (totalAssets / totalEmployees).toFixed(2) : 0;
+      return {
+        department: r.department,
         departmentName: r.department,
         totalAssets,
         employeeCount: totalEmployees,
