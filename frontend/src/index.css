@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Custom base styles ─────────────────────────────────────── */
+@layer base {
+  * {
+    box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+  }
+
+  body {
+    background-color: #0f172a;
+    color: #f1f5f9;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+/* ── Reusable component classes ─────────────────────────────── */
+@layer components {
+  .card {
+    @apply bg-surface-card rounded-2xl border border-surface-border shadow-card;
+  }
+
+  .btn-primary {
+    @apply bg-primary-600 hover:bg-primary-500 text-white font-medium px-4 py-2 rounded-xl
+           transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent hover:bg-surface-border text-slate-300 hover:text-white font-medium
+           px-4 py-2 rounded-xl transition-all duration-200;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white font-medium px-4 py-2 rounded-xl
+           transition-all duration-200 active:scale-95;
+  }
+
+  .input {
+    @apply bg-surface border border-surface-border text-slate-100 placeholder-slate-500
+           rounded-xl px-3 py-2 w-full focus:outline-none focus:border-primary-500
+           focus:ring-1 focus:ring-primary-500 transition-colors duration-200;
+  }
+
+  .label {
+    @apply text-sm font-medium text-slate-400 mb-1 block;
+  }
+
+  .badge-available    { @apply bg-emerald-900/60 text-emerald-300 border border-emerald-700; }
+  .badge-allocated    { @apply bg-blue-900/60 text-blue-300 border border-blue-700; }
+  .badge-reserved     { @apply bg-purple-900/60 text-purple-300 border border-purple-700; }
+  .badge-maintenance  { @apply bg-amber-900/60 text-amber-300 border border-amber-700; }
+  .badge-lost         { @apply bg-red-900/60 text-red-300 border border-red-700; }
+  .badge-retired      { @apply bg-slate-700/60 text-slate-400 border border-slate-600; }
+  .badge-disposed     { @apply bg-slate-800/60 text-slate-500 border border-slate-700; }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-slate-400 hover:text-white
+           hover:bg-surface-border transition-all duration-200 cursor-pointer;
+  }
+
+  .sidebar-link.active {
+    @apply text-white bg-primary-600/20 border border-primary-600/30;
+  }
+}
