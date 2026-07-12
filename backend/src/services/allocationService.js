@@ -1,10 +1,6 @@
 /**
  * services/allocationService.js
  * Core business logic for asset allocation and transfer conflict detection.
- *
- * KEY RULE: An asset can have at most ONE active allocation at a time.
- * Attempting to allocate an already-allocated asset returns a conflict error
- * with the current holder's name (not a generic 400).
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -15,57 +11,133 @@ const prisma = new PrismaClient();
 
 /**
  * Allocate an asset to an employee or department.
- * Throws a structured error if the asset is already allocated.
- *
- * @param {object} data - { assetId, employeeId?, departmentId?, expectedReturn? }
- * @param {object} actor - req.user (the Asset Manager performing the action)
  */
 async function allocate(data, actor) {
-  const { assetId, employeeId, departmentId, expectedReturn } = data;
+  const { assetId, employeeId, departmentId, expectedReturn, conditionNotes } = data;
 
-  // TODO (Member B):
-  // 1. Fetch asset; throw 404 if not found
-  // 2. Check for existing active allocation:
-  //    const existing = await prisma.allocation.findFirst({
-  //      where: { assetId, status: 'ACTIVE' },
-  //      include: { employee: true, department: true }
-  //    });
-  // 3. If exists: throw conflict error:
-  //    const holder = existing.employee?.name ?? existing.department?.name;
-  //    throw Object.assign(new Error(`Currently held by ${holder}`), { status: 409, currentHolder: holder });
-  // 4. Create allocation record
-  // 5. Update asset.status = 'ALLOCATED'
-  // 6. Send notification to the allocated employee
-  // 7. Log ActivityLog
-  // 8. broadcastDashboardRefresh()
-  // 9. Return new allocation
+  if (!assetId) throw Object.assign(new Error('assetId is required'), { status: 400 });
+  if (!employeeId && !departmentId) throw Object.assign(new Error('employeeId or departmentId is required'), { status: 400 });
 
-  throw new Error('TODO: implement allocationService.allocate()');
+  // 1. Fetch asset
+  const asset = await prisma.asset.findUnique({ where: { id: assetId } });
+  if (!asset) throw Object.assign(new Error('Asset not found'), { status: 404 });
+
+  // 2. Check for existing active allocation
+  const existing = await prisma.allocation.findFirst({
+    where: { assetId, status: 'ACTIVE' },
+    include: { employee: true, department: true },
+  });
+
+  // 3. Conflict detection
+  if (existing) {
+    const holder = existing.employee?.name ?? existing.department?.name ?? 'Unknown';
+    throw Object.assign(new Error(`Asset is currently held by ${holder}`), { status: 409, currentHolder: holder });
+  }
+
+  // 4. Create allocation & update asset status in a transaction
+  const [allocation] = await prisma.$transaction([
+    prisma.allocation.create({
+      data: {
+        assetId,
+        employeeId: employeeId || null,
+        departmentId: departmentId || null,
+        expectedReturn: expectedReturn ? new Date(expectedReturn) : null,
+        conditionNotes: conditionNotes || null,
+        status: 'ACTIVE',
+      },
+      include: { employee: true, department: true, asset: true },
+    }),
+    prisma.asset.update({
+      where: { id: assetId },
+      data: { status: 'ALLOCATED' },
+    }),
+    prisma.activityLog.create({
+      data: {
+        actorId: actor.id,
+        action: 'ALLOCATED_ASSET',
+        entity: 'ASSET',
+        entityId: assetId,
+        metadata: { employeeId, departmentId },
+      },
+    }),
+  ]);
+
+  // 5. Notify the allocated employee
+  if (employeeId) {
+    await notificationService.send(
+      employeeId,
+      'ASSET_ASSIGNED',
+      `You have been assigned asset: ${asset.tag} (${asset.name})`,
+      allocation.id,
+      'ALLOCATION'
+    );
+  }
+
+  // 6. Broadcast dashboard refresh (real-time stats update)
+  broadcastDashboardRefresh();
+
+  return allocation;
 }
 
 /**
  * Mark an allocation as returned.
  */
 async function returnAsset(allocationId, conditionNotes, actor) {
-  // TODO (Member B):
-  // 1. Find allocation; verify status = ACTIVE
-  // 2. Set status = RETURNED, actualReturn = now, conditionNotes
-  // 3. Set asset.status = AVAILABLE
-  // 4. Log + notify + broadcast
-  throw new Error('TODO: implement allocationService.returnAsset()');
+  const allocation = await prisma.allocation.findUnique({
+    where: { id: allocationId },
+    include: { asset: true, employee: true },
+  });
+
+  if (!allocation) throw Object.assign(new Error('Allocation not found'), { status: 404 });
+  if (allocation.status !== 'ACTIVE') throw Object.assign(new Error('Allocation is not active'), { status: 400 });
+
+  // Update allocation & asset in transaction
+  await prisma.$transaction([
+    prisma.allocation.update({
+      where: { id: allocationId },
+      data: {
+        status: 'RETURNED',
+        actualReturn: new Date(),
+        conditionNotes: conditionNotes || allocation.conditionNotes,
+      },
+    }),
+    prisma.asset.update({
+      where: { id: allocation.assetId },
+      data: { status: 'AVAILABLE' },
+    }),
+    prisma.activityLog.create({
+      data: {
+        actorId: actor.id,
+        action: 'RETURNED_ASSET',
+        entity: 'ASSET',
+        entityId: allocation.assetId,
+        metadata: { allocationId, conditionNotes },
+      },
+    }),
+  ]);
+
+  if (allocation.employeeId) {
+    await notificationService.send(
+      allocation.employeeId,
+      'ASSET_RETURNED',
+      `Your assignment for asset ${allocation.asset.tag} has been marked as returned.`,
+      allocation.id,
+      'ALLOCATION'
+    );
+  }
+
+  broadcastDashboardRefresh();
+  return { message: 'Asset returned successfully' };
 }
 
 /**
- * Query all overdue allocations (expectedReturn < now AND status = ACTIVE).
- * Called by the reports route and the notification scheduler.
+ * Query all overdue allocations
  */
 async function getOverdue() {
-  // TODO (Member B):
-  // return await prisma.allocation.findMany({
-  //   where: { status: 'ACTIVE', expectedReturn: { lt: new Date() } },
-  //   include: { asset: true, employee: true, department: true }
-  // });
-  return [];
+  return await prisma.allocation.findMany({
+    where: { status: 'ACTIVE', expectedReturn: { lt: new Date() } },
+    include: { asset: true, employee: true, department: true },
+  });
 }
 
 module.exports = { allocate, returnAsset, getOverdue };

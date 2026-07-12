@@ -1,8 +1,6 @@
 /**
  * services/notificationService.js
  * Creates Notification records in the DB and emits Socket.io events.
- *
- * Usage: await notificationService.send(recipientId, type, message, refId, refType)
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -12,22 +10,18 @@ const prisma = new PrismaClient();
 
 /**
  * Create a notification and push it to the recipient's socket room.
- *
- * @param {string} recipientId - Employee ID
- * @param {string} type - NotificationType enum value
- * @param {string} message - Human-readable notification text
- * @param {string} [refId] - Related entity ID (optional)
- * @param {string} [refType] - Related entity type (optional)
  */
 async function send(recipientId, type, message, refId = null, refType = null) {
-  // TODO (Member B):
-  // const notification = await prisma.notification.create({
-  //   data: { recipientId, type, message, refId, refType }
-  // });
-  // emitToUser(recipientId, 'notification:new', notification);
-  // return notification;
-
-  console.log(`[Notification] → ${recipientId}: [${type}] ${message}`);
+  try {
+    const notification = await prisma.notification.create({
+      data: { recipientId, type, message, refId, refType },
+    });
+    emitToUser(recipientId, 'notification:new', notification);
+    return notification;
+  } catch (err) {
+    // Never crash the main flow due to notification failure
+    console.error('[NotificationService] Failed to send:', err.message);
+  }
 }
 
 /**
@@ -39,13 +33,33 @@ async function sendToMany(recipientIds, type, message, refId, refType) {
 
 /**
  * Send overdue return alerts for all past-due allocations.
- * Call this on a schedule (setInterval every hour for hackathon).
  */
 async function sendOverdueAlerts() {
-  // TODO (Member B):
-  // 1. Query allocations where expectedReturn < now AND status = ACTIVE
-  // 2. For each: send OVERDUE_RETURN notification to employee + asset manager
-  console.log('[Scheduler] Checking overdue returns...');
+  try {
+    const overdue = await prisma.allocation.findMany({
+      where: { status: 'ACTIVE', expectedReturn: { lt: new Date() } },
+      include: {
+        asset: { select: { tag: true, name: true } },
+        employee: { select: { id: true, name: true } },
+      },
+    });
+
+    for (const alloc of overdue) {
+      if (alloc.employeeId) {
+        await send(
+          alloc.employeeId,
+          'OVERDUE_RETURN',
+          `Asset ${alloc.asset.tag} (${alloc.asset.name}) is overdue for return.`,
+          alloc.id,
+          'ALLOCATION'
+        );
+      }
+    }
+
+    console.log(`[Scheduler] Sent ${overdue.length} overdue return alert(s).`);
+  } catch (err) {
+    console.error('[Scheduler] Overdue check failed:', err.message);
+  }
 }
 
 module.exports = { send, sendToMany, sendOverdueAlerts };
